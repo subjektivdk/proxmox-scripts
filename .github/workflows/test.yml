@@ -1,0 +1,50 @@
+name: test
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck -x -e SC1091 -s bash ct/*.sh install/*.sh tools/* misc/*.func
+
+  install:
+    # Runs install/pixi-hub-install.sh in a Debian 13 container with systemd, like a Proxmox LXC.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start Debian 13 with systemd
+        run: |
+          docker run -d --name ct --privileged --cgroupns=host \
+            -v /sys/fs/cgroup:/sys/fs/cgroup:rw --tmpfs /run --tmpfs /run/lock \
+            debian:trixie bash -c 'apt-get update -qq && apt-get install -y -qq systemd systemd-sysv dbus >/dev/null && exec /sbin/init'
+          for i in $(seq 90); do
+            state=$(docker exec ct systemctl is-system-running 2>/dev/null || true)
+            [[ "$state" == running || "$state" == degraded ]] && break
+            sleep 2
+          done
+          echo "systemd: $state"
+      - name: Copy scripts
+        run: |
+          docker exec ct mkdir -p /opt/pixi-hub-lxc
+          docker cp misc ct:/opt/pixi-hub-lxc/
+          docker cp install ct:/opt/pixi-hub-lxc/
+          docker cp tools ct:/opt/pixi-hub-lxc/
+      - name: Install
+        run: docker exec -e VERBOSE=yes -e REPO_RAW="https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}" ct bash /opt/pixi-hub-lxc/install/pixi-hub-install.sh
+      - name: Install again (must be idempotent)
+        run: docker exec ct bash /opt/pixi-hub-lxc/install/pixi-hub-install.sh
+      - name: Check
+        run: |
+          docker exec ct node --version
+          docker exec ct ob --help >/dev/null
+          docker exec ct runuser -u pixi -- /home/pixi/.local/bin/uv --version
+          docker exec ct test -f /home/pixi/.ssh/pixi-hub-deploy.pub
+          docker exec ct test -f /home/pixi/.config/systemd/user/obsidian-sync.service
+          docker exec ct stat -c '%a %U' /home/pixi/.config/pixi-hub/env | grep -qx '600 pixi'
+          docker exec ct loginctl show-user pixi --property=Linger | grep -qx Linger=yes
+          docker exec ct pixi-hub-lxc status
+          docker exec ct runuser -u pixi -- env XDG_RUNTIME_DIR=/run/user/1000 systemctl --user cat obsidian-sync.service
