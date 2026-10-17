@@ -1,0 +1,256 @@
+#!/usr/bin/env bash
+# pixi-hub-lxc: setup and maintenance inside the pixi-hub container (run as root).
+#
+#   pixi-hub-lxc setup      deploy key + clone/install pixi-hub + Obsidian login and vault (pull-only)
+#   pixi-hub-lxc github     only the GitHub part of setup
+#   pixi-hub-lxc obsidian   only the Obsidian part of setup
+#   pixi-hub-lxc status     what is installed, configured and running
+#   pixi-hub-lxc go-live    switch to bidirectional sync and start pixi-hub's services
+#   pixi-hub-lxc pause      stop pixi-hub's services (sync keeps running) - e.g. to roll back to pixi
+#   pixi-hub-lxc update     Debian, obsidian-headless, these scripts and pixi-hub
+#
+# License: MIT
+set -Eeuo pipefail
+# shellcheck source=../misc/common.func
+source /opt/pixi-hub-lxc/misc/common.func
+# shellcheck source=/dev/null
+[[ -f /etc/pixi-hub-lxc.conf ]] && source /etc/pixi-hub-lxc.conf
+
+HUB_USER="${HUB_USER:-pixi}"
+HUB_REPO="${HUB_REPO:-git@github.com:subjektivdk/pixi-hub.git}"
+DEVICE_NAME="${DEVICE_NAME:-pixi-hub-lxc}"
+REPO_RAW="${REPO_RAW:-https://raw.githubusercontent.com/subjektivdk/proxmox-scripts/main}"
+
+[[ $EUID -eq 0 ]] || die "Kør som root (fx: pct exec <id> -- pixi-hub-lxc $*)."
+HUB_UID=$(id -u "$HUB_USER")
+HOME_DIR=$(getent passwd "$HUB_USER" | cut -d: -f6)
+VAULT="$HOME_DIR/vault"
+HUB_SRC="$HOME_DIR/Projects/pixi-hub"
+HUB_UNITS=(pixi-hub.service pixi-hub-pebble.timer pixi-hub-backup.timer)
+
+# Run a command as the hub user with a proper home and access to its systemd user instance.
+as_user() {
+  runuser -u "$HUB_USER" -- env HOME="$HOME_DIR" USER="$HUB_USER" \
+    PATH="$HOME_DIR/.local/bin:/usr/local/bin:/usr/bin:/bin" \
+    XDG_RUNTIME_DIR="/run/user/$HUB_UID" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$HUB_UID/bus" \
+    "$@"
+}
+ob_() { as_user ob "$@"; }
+usersys() { as_user systemctl --user "$@"; }
+wt() { whiptail --backtitle "pixi-hub LXC" "$@" 3>&1 1>&2 2>&3; }
+
+# --- github -----------------------------------------------------------------
+github_ok() { as_user ssh -o BatchMode=yes -T git@github.com 2>&1 | grep -q "successfully authenticated"; }
+
+repo_slug() { sed -E 's#^(git@github.com:|https://github.com/)##; s#\.git$##' <<<"$HUB_REPO"; }
+
+cmd_github() {
+  if ! github_ok; then
+    echo
+    echo -e "${BOLD}Deploy key til $(repo_slug)${CL}"
+    echo -e "Tilføj nøglen som ${BOLD}read-only${CL} deploy key (Allow write access: fra):"
+    echo -e "  ${BGN}https://github.com/$(repo_slug)/settings/keys/new${CL}"
+    echo -e "  Title: ${BOLD}$DEVICE_NAME${CL}"
+    echo
+    cat "$HOME_DIR/.ssh/pixi-hub-deploy.pub"
+    echo
+    while ! github_ok; do
+      read -r -p "Tryk Enter, når nøglen er tilføjet (eller skriv s for at springe over): " ans </dev/tty
+      [[ "$ans" == "s" ]] && { msg_warn "Sprang GitHub over. Kør senere: pixi-hub-lxc github"; return 0; }
+      github_ok || msg_warn "GitHub kender ikke nøglen endnu."
+    done
+  fi
+  msg_ok "GitHub accepterer deploy key"
+
+  if [[ -d "$HUB_SRC/.git" ]]; then
+    msg_info "Henter seneste pixi-hub"
+    silent as_user git -C "$HUB_SRC" pull --ff-only
+  else
+    msg_info "Kloner pixi-hub"
+    silent as_user git clone "$HUB_REPO" "$HUB_SRC"
+  fi
+  msg_ok "pixi-hub-kode i $HUB_SRC ($(as_user git -C "$HUB_SRC" log -1 --format=%h))"
+  install_hub
+}
+
+install_hub() {
+  msg_info "Installerer pixi-hub med uv (inkl. jev)"
+  silent as_user uv tool install --force "${HUB_SRC}[jev]"
+  msg_ok "Installerede pixi-hub ($(as_user pixi-hub --version 2>/dev/null || echo '?'))"
+
+  msg_info "Kopierer systemd-units fra repoet"
+  local u
+  for u in "${HUB_UNITS[@]}" pixi-hub-pebble.service pixi-hub-backup.service; do
+    [[ -f "$HUB_SRC/deploy/systemd/$u" ]] && install -m 0644 -o "$HUB_USER" -g "$HUB_USER" \
+      "$HUB_SRC/deploy/systemd/$u" "$HOME_DIR/.config/systemd/user/$u"
+  done
+  # pixi-hub waits for the vault sync instead of a desktop Obsidian.
+  install -d -o "$HUB_USER" -g "$HUB_USER" "$HOME_DIR/.config/systemd/user/pixi-hub.service.d"
+  cat >"$HOME_DIR/.config/systemd/user/pixi-hub.service.d/obsidian-sync.conf" <<'EOF'
+[Unit]
+After=obsidian-sync.service
+Wants=obsidian-sync.service
+EOF
+  chown "$HUB_USER:$HUB_USER" "$HOME_DIR/.config/systemd/user/pixi-hub.service.d/obsidian-sync.conf"
+  usersys daemon-reload
+  msg_ok "Kopierede units (ikke slået til; det sker ved go-live)"
+}
+
+# --- obsidian ---------------------------------------------------------------
+ob_logged_in() { ob_ sync-list-remote --json >/dev/null 2>&1; }
+ob_configured() { ob_ sync-status --path "$VAULT" >/dev/null 2>&1; }
+
+cmd_obsidian() {
+  if ! ob_logged_in; then
+    echo
+    echo -e "${BOLD}Log ind på Obsidian${CL} (e-mail, password og evt. 2FA)"
+    as_user ob login </dev/tty || die "Login fejlede. Prøv igen: pixi-hub-lxc obsidian"
+  fi
+  msg_ok "Logget ind på Obsidian"
+
+  if ! ob_configured; then
+    local json items=() vault
+    json=$(ob_ sync-list-remote --json)
+    while IFS=$'\t' read -r id name; do items+=("$id" "$name"); done \
+      < <(jq -r '(.vaults + .shared)[] | [.id, .name] | @tsv' <<<"$json")
+    [[ ${#items[@]} -gt 0 ]] || die "Kontoen har ingen remote vaults."
+    vault=$(wt --title "Obsidian Sync" --menu "Hvilket vault skal synkes til $VAULT?" 16 70 8 "${items[@]}") || exit 1
+    echo -e "Er vaultet end-to-end-krypteret, spørger ob om krypteringspasswordet nu."
+    as_user ob sync-setup --vault "$vault" --path "$VAULT" --device-name "$DEVICE_NAME" </dev/tty \
+      || die "sync-setup fejlede. Prøv igen: pixi-hub-lxc obsidian"
+  fi
+  msg_ok "Vaultet er koblet til Obsidian Sync"
+
+  # Start safely: pull-only until go-live. Only notes (no attachments, no .obsidian configs).
+  # 'unsupported' must stay out of file-types, or pixi-hub's temporary files could be synced.
+  msg_info "Sætter sync til pull-only"
+  silent ob_ sync-config --path "$VAULT" --mode pull-only --configs "" --file-types "" \
+    --conflict-strategy merge --device-name "$DEVICE_NAME"
+  msg_ok "Sync: pull-only, kun noter"
+
+  msg_info "Starter obsidian-sync.service"
+  usersys daemon-reload
+  silent usersys enable obsidian-sync.service
+  silent usersys restart obsidian-sync.service
+  msg_ok "obsidian-sync kører ($(find "$VAULT" -name '*.md' 2>/dev/null | wc -l) noter indtil videre)"
+}
+
+# --- status -----------------------------------------------------------------
+check() { if eval "$2" >/dev/null 2>&1; then echo -e "$CM$1"; else echo -e "$CROSS$1"; fi; }
+
+cmd_status() {
+  echo -e "${BOLD}pixi-hub LXC${CL}  ($(hostname), $(hostname -I | awk '{print $1}'))"
+  echo
+  echo -e "${BOLD}Installation${CL}"
+  check "Node $(node --version 2>/dev/null)" "command -v node"
+  check "obsidian-headless" "command -v ob"
+  check "uv" "as_user uv --version"
+  check "pixi-hub installeret" "as_user pixi-hub --version"
+  check "GitHub deploy key virker" "github_ok"
+  echo
+  echo -e "${BOLD}Obsidian${CL}"
+  check "Logget ind" "ob_logged_in"
+  check "Vault koblet til ($VAULT)" "ob_configured"
+  check "obsidian-sync.service kører" "usersys is-active obsidian-sync.service"
+  ob_configured && ob_ sync-config --path "$VAULT" 2>/dev/null | sed "s/^/$TAB$TAB/" || true
+  echo
+  echo -e "${BOLD}Migrering fra pixi${CL}"
+  check "Config (~/.config/pixi-hub/pixi-hub.toml)" "test -f '$HOME_DIR/.config/pixi-hub/pixi-hub.toml'"
+  check "Config peger på $VAULT" "vault_ok"
+  check "Database" "test -f '$HOME_DIR/.local/share/pixi-hub/pixi-hub.db'"
+  check "age-nøgle til urdata" "test -f '$HOME_DIR/.local/share/pixi-hub/pebble-age.key'"
+  check "rclone-remote hetzner-sbox" "as_user rclone listremotes | grep -qx hetzner-sbox:"
+  check "Hemmeligheder i env (TYPESAFE_API_KEY)" "grep -q '^TYPESAFE_API_KEY=.' '$HOME_DIR/.config/pixi-hub/env'"
+  echo
+  echo -e "${BOLD}Tjenester${CL}"
+  local u
+  for u in "${HUB_UNITS[@]}"; do
+    check "$u ($(usersys is-active "$u" 2>/dev/null || true))" "usersys is-active $u"
+  done
+}
+
+vault_ok() {
+  [[ "$(as_user pixi-hub --json describe 2>/dev/null | jq -r .vault)" == "$VAULT" ]]
+}
+
+# --- go-live / pause ----------------------------------------------------------
+cmd_go_live() {
+  local missing=()
+  as_user pixi-hub --version >/dev/null 2>&1 || missing+=("pixi-hub er ikke installeret (pixi-hub-lxc github)")
+  ob_configured || missing+=("vaultet er ikke sat op (pixi-hub-lxc obsidian)")
+  [[ -f "$HOME_DIR/.config/pixi-hub/pixi-hub.toml" ]] || missing+=("config mangler")
+  vault_ok || missing+=("config peger ikke på $VAULT ([hub] vault)")
+  [[ -f "$HOME_DIR/.local/share/pixi-hub/pixi-hub.db" ]] || missing+=("database mangler")
+  if ((${#missing[@]})); then
+    msg_error "Ikke klar til go-live:"
+    printf "${TAB}${TAB}- %s\n" "${missing[@]}"
+    exit 1
+  fi
+  echo -e "${RD}${BOLD}Vigtigt:${CL} pixi-hub må ikke køre andre steder (fx på pixi), når den startes her."
+  read -r -p "Er hubben stoppet alle andre steder? Skriv ja: " ans </dev/tty
+  [[ "$ans" == "ja" ]] || die "Afbrudt."
+
+  msg_info "Skifter sync til bidirectional"
+  silent ob_ sync-config --path "$VAULT" --mode bidirectional
+  silent usersys restart obsidian-sync.service
+  msg_ok "Sync: bidirectional"
+
+  msg_info "Starter pixi-hub"
+  silent usersys enable --now "${HUB_UNITS[@]}"
+  msg_ok "pixi-hub kører. Følg med: journalctl --user -u pixi-hub -f (som $HUB_USER)"
+}
+
+cmd_pause() {
+  msg_info "Stopper pixi-hub"
+  silent usersys disable --now "${HUB_UNITS[@]}"
+  msg_ok "pixi-hub stoppet (obsidian-sync kører videre)"
+}
+
+# --- update -------------------------------------------------------------------
+cmd_update() {
+  msg_info "Opdaterer Debian"
+  silent apt-get update
+  export DEBIAN_FRONTEND=noninteractive
+  silent apt-get -y -o Dpkg::Options::=--force-confold dist-upgrade
+  msg_ok "Opdaterede Debian"
+
+  msg_info "Opdaterer obsidian-headless"
+  silent npm install -g obsidian-headless@latest
+  msg_ok "Opdaterede obsidian-headless"
+
+  msg_info "Opdaterer pixi-hub-lxc-scripts"
+  local f tmp
+  for f in misc/common.func install/pixi-hub-install.sh tools/pixi-hub-lxc; do
+    tmp=$(mktemp)
+    curl -fsSL "$REPO_RAW/$f" -o "$tmp" && install -m 0755 "$tmp" "/opt/pixi-hub-lxc/$f"
+    rm -f "$tmp"
+  done
+  msg_ok "Opdaterede scripts"
+
+  if [[ -d "$HUB_SRC/.git" ]] && github_ok; then
+    msg_info "Opdaterer pixi-hub"
+    silent as_user git -C "$HUB_SRC" pull --ff-only
+    install_hub
+  else
+    msg_warn "Sprang pixi-hub over (ikke klonet eller ingen GitHub-adgang)"
+  fi
+
+  local u
+  for u in obsidian-sync.service pixi-hub.service; do
+    if usersys is-active "$u" >/dev/null 2>&1; then
+      usersys restart "$u"
+      msg_ok "Genstartede $u"
+    fi
+  done
+}
+
+case "${1:-}" in
+  setup) cmd_github; cmd_obsidian; echo; cmd_status ;;
+  github) cmd_github ;;
+  obsidian) cmd_obsidian ;;
+  status) cmd_status ;;
+  go-live) cmd_go_live ;;
+  pause) cmd_pause ;;
+  update) cmd_update ;;
+  *) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

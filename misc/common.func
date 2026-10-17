@@ -1,0 +1,75 @@
+# Shared helpers for the scripts in this repo (sourced, not run).
+# Style borrowed from community-scripts.org: msg_info shows a spinner, msg_ok/msg_error close the line.
+# License: MIT
+# shellcheck disable=SC2034  # colours are used by the scripts that source this file
+
+YW=$'\033[33m'
+GN=$'\033[1;92m'
+RD=$'\033[01;31m'
+BL=$'\033[36m'
+BGN=$'\033[4;92m'
+DGN=$'\033[32m'
+CL=$'\033[m'
+BOLD=$'\033[1m'
+TAB="  "
+CM="${TAB}✔️${TAB}"
+CROSS="${TAB}✖️${TAB}"
+INFO="${TAB}💡${TAB}"
+
+SPINNER_PID=""
+
+spinner() {
+  local chars=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏) i=0
+  while true; do
+    printf "\r\033[2K${TAB}%s${TAB}%b" "${YW}${chars[i++ % ${#chars[@]}]}${CL}" "${YW}${SPINNER_MSG}${CL}" >&2
+    sleep 0.1
+  done
+}
+
+stop_spinner() {
+  if [[ -n "$SPINNER_PID" ]] && kill -0 "$SPINNER_PID" 2>/dev/null; then
+    kill "$SPINNER_PID" 2>/dev/null
+    wait "$SPINNER_PID" 2>/dev/null || true
+  fi
+  SPINNER_PID=""
+  printf "\r\033[2K" >&2
+}
+
+msg_info() {
+  stop_spinner
+  SPINNER_MSG="$1"
+  if [[ "${VERBOSE:-no}" == "yes" || ! -t 2 ]]; then
+    printf "${TAB}⏳${TAB}%b\n" "${YW}$1${CL}" >&2
+    return
+  fi
+  spinner &
+  SPINNER_PID=$!
+  disown "$SPINNER_PID" 2>/dev/null || true
+}
+
+msg_ok() { stop_spinner; printf "%s%b\n" "$CM" "${GN}$1${CL}" >&2; }
+msg_warn() { stop_spinner; printf "%s%b\n" "$INFO" "${YW}$1${CL}" >&2; }
+msg_error() { stop_spinner; printf "%s%b\n" "$CROSS" "${RD}$1${CL}" >&2; }
+die() { msg_error "$1"; exit 1; }
+
+# Runs a command quietly; on failure prints its output and stops the script.
+# VERBOSE=yes shows everything as it happens.
+silent() {
+  if [[ "${VERBOSE:-no}" == "yes" ]]; then
+    "$@"
+    return
+  fi
+  local log
+  log=$(mktemp)
+  if ! "$@" >"$log" 2>&1; then
+    local rc=$?
+    stop_spinner
+    msg_error "Fejlede (exit $rc): $*"
+    tail -n 30 "$log" >&2
+    rm -f "$log"
+    exit "$rc"
+  fi
+  rm -f "$log"
+}
+
+trap stop_spinner EXIT
