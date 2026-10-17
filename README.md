@@ -21,6 +21,8 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/subjektivdk/proxmox-scri
    - viser deploy key'en, som du tilføjer som **read-only** på GitHub, og kloner og installerer så pixi-hub (`uv tool install …[jev]`)
    - `ob login` (e-mail, password, 2FA), vælg vault, og E2EE-password, hvis vaultet er end-to-end-krypteret
    - starter sync i **pull-only**, kun noter (ingen vedhæftninger, ingen `.obsidian`-config)
+   - **Hetzner Storage Box**: brugernavn og password. Det gemmes som rclone-remoten `hetzner-sbox` (passwordet bliver obscured via stdin og havner ikke i historikken), og forbindelsen testes med det samme
+   - **TYPESAFE_API_KEY** til `~/.config/pixi-hub/env` (chmod 600)
 
 **pixi-hub's scheduler startes ikke.** Det sker først med `pixi-hub-lxc go-live`, så hubben aldrig kører to steder på én gang.
 
@@ -28,8 +30,9 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/subjektivdk/proxmox-scri
 | Kommando | Gør |
 |---|---|
 | `pixi-hub-lxc status` | Hvad er installeret, sat op, migreret og kørende |
-| `pixi-hub-lxc setup` | GitHub + Obsidian (kan køres igen) |
-| `pixi-hub-lxc github` / `obsidian` | Kun den ene del |
+| `pixi-hub-lxc config` | **Menu** med ✔/✖ for Hetzner, hemmeligheder, GitHub og Obsidian. Vælg det, der mangler |
+| `pixi-hub-lxc setup` | Det hele i rækkefølge: GitHub, Obsidian, Hetzner, hemmeligheder (kan køres igen) |
+| `pixi-hub-lxc hetzner` / `secrets` / `github` / `obsidian` | Kun den ene del |
 | `pixi-hub-lxc go-live` | Tjekker at config, database og vault er på plads, skifter sync til bidirectional og starter pixi-hub, pebble- og backup-timeren |
 | `pixi-hub-lxc pause` | Stopper pixi-hub igen (sync kører videre), fx for at rulle tilbage |
 | `pixi-hub-lxc update` | Debian, obsidian-headless, disse scripts og pixi-hub |
@@ -37,7 +40,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/subjektivdk/proxmox-scri
 Fra Proxmox-værten: `pct exec <id> -- pixi-hub-lxc status`. Kører du `ct/pixi-hub.sh` inde i containeren, opdaterer den.
 
 ### Det gør scriptet ikke
-Hubbens **data** flyttes ikke: config, database, age-nøglen til urdata, rclone-remoten og hemmeligheder (`~/.config/pixi-hub/env`). Det er en del af selve skiftet, se [pixi-hub#18](https://github.com/subjektivdk/pixi-hub/issues/18). `status` viser, hvad der mangler.
+Hubbens **data** flyttes ikke: config, database og age-nøglen til urdata. Det er en del af selve skiftet, se [pixi-hub#18](https://github.com/subjektivdk/pixi-hub/issues/18). `status` viser, hvad der mangler.
 
 ### Sikkerhed
 - Repoet indeholder ingen hemmeligheder. Deploy key'en laves i containeren og forlader den aldrig.

@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # pixi-hub-lxc: setup and maintenance inside the pixi-hub container (run as root).
 #
-#   pixi-hub-lxc setup      deploy key + clone/install pixi-hub + Obsidian login and vault (pull-only)
+#   pixi-hub-lxc config     menu: Hetzner Storage Box, secrets, GitHub, Obsidian
+#   pixi-hub-lxc setup      deploy key + pixi-hub + Obsidian (pull-only) + Hetzner + secrets, in that order
+#   pixi-hub-lxc hetzner    only the Hetzner Storage Box (rclone remote hetzner-sbox)
+#   pixi-hub-lxc secrets    only the secrets in ~/.config/pixi-hub/env
 #   pixi-hub-lxc github     only the GitHub part of setup
 #   pixi-hub-lxc obsidian   only the Obsidian part of setup
 #   pixi-hub-lxc status     what is installed, configured and running
@@ -135,6 +138,111 @@ cmd_obsidian() {
   msg_ok "obsidian-sync kører ($(find "$VAULT" -name '*.md' 2>/dev/null | wc -l) noter indtil videre)"
 }
 
+# --- hetzner storage box ------------------------------------------------------
+# pixi-hub uses the rclone remote "hetzner-sbox": pebble fetches watch data from
+# hetzner-sbox:home/pixi-sync/inbox and deploy/backup.sh writes its nightly backup there.
+SBOX_REMOTE="hetzner-sbox"
+
+sbox_ok() { as_user rclone lsd "$SBOX_REMOTE:" --contimeout 10s --timeout 20s >/dev/null 2>&1; }
+
+cmd_hetzner() {
+  if as_user rclone listremotes | grep -qx "$SBOX_REMOTE:"; then
+    if sbox_ok; then
+      wt --title "Hetzner Storage Box" --yesno "Remoten $SBOX_REMOTE findes og virker.\n\nVil du sætte den op igen?" 10 60 \
+        || { msg_ok "Hetzner Storage Box virker"; return 0; }
+    else
+      msg_warn "Remoten $SBOX_REMOTE findes, men forbindelsen fejler. Sæt den op igen."
+    fi
+  fi
+
+  local user host port pass obscured
+  user=$(wt --title "Hetzner Storage Box" --inputbox \
+    "Brugernavn (står i Hetzner Console under Storage Box, fx u123456)" 10 70 "") || return 1
+  [[ "$user" =~ ^u[0-9]+(-sub[0-9]+)?$ ]] || { msg_error "Brugernavnet ligner ikke en Storage Box-bruger (u123456 eller u123456-sub1)."; return 1; }
+  host=$(wt --title "Hetzner Storage Box" --inputbox "Server" 8 70 "${user%%-sub*}.your-storagebox.de") || return 1
+  port=$(wt --title "Hetzner Storage Box" --inputbox "SSH-port (Storage Box bruger 23)" 8 70 "23") || return 1
+  pass=$(wt --title "Hetzner Storage Box" --passwordbox "Password til $user" 8 70) || return 1
+  [[ -n "$pass" ]] || { msg_error "Tomt password."; return 1; }
+
+  msg_info "Gemmer rclone-remoten $SBOX_REMOTE"
+  # Obscure via stdin so the password never appears in a process list or shell history.
+  obscured=$(printf '%s' "$pass" | as_user rclone obscure -)
+  unset pass
+  as_user rclone config delete "$SBOX_REMOTE" >/dev/null 2>&1 || true
+  silent as_user rclone config create "$SBOX_REMOTE" sftp \
+    host="$host" user="$user" port="$port" pass="$obscured" \
+    shell_type=unix md5sum_command=md5sum sha1sum_command=sha1sum --no-obscure
+  chmod 600 "$HOME_DIR/.config/rclone/rclone.conf"
+  msg_ok "Gemte $SBOX_REMOTE i ~$HUB_USER/.config/rclone/rclone.conf"
+
+  msg_info "Tester forbindelsen"
+  if ! sbox_ok; then
+    msg_error "Kunne ikke logge ind på $host:$port som $user."
+    echo -e "${TAB}${TAB}Tjek password, og at SSH er slået til for Storage Box'en i Hetzner Console."
+    return 1
+  fi
+  msg_ok "Forbindelsen til Hetzner Storage Box virker"
+  if as_user rclone lsd "$SBOX_REMOTE:home/pixi-sync" >/dev/null 2>&1; then
+    msg_ok "Fandt pixi-sync's mappe (home/pixi-sync)"
+  else
+    msg_warn "Fandt ikke home/pixi-sync. Den oprettes af pixi-sync-appen, når uret sender første gang."
+  fi
+}
+
+# --- secrets ------------------------------------------------------------------
+ENV_FILE="$HOME_DIR/.config/pixi-hub/env"
+
+env_has() { grep -q "^$1=." "$ENV_FILE" 2>/dev/null; }
+
+# Sets KEY=value in the env file without leaving the value anywhere else.
+env_set() {
+  local key=$1 value=$2 tmp
+  tmp=$(mktemp)
+  grep -v "^$key=" "$ENV_FILE" 2>/dev/null >"$tmp" || true
+  printf '%s=%s\n' "$key" "$value" >>"$tmp"
+  install -m 0600 -o "$HUB_USER" -g "$HUB_USER" "$tmp" "$ENV_FILE"
+  rm -f "$tmp"
+}
+
+cmd_secrets() {
+  local value text
+  text="TYPESAFE_API_KEY bruges af readiness til Jev-probability."
+  env_has TYPESAFE_API_KEY && text+="\n\nDer er allerede en nøgle. Tom = behold den."
+  value=$(wt --title "Hemmeligheder" --passwordbox "$text" 12 70) || return 1
+  if [[ -n "$value" ]]; then
+    env_set TYPESAFE_API_KEY "$value"
+    msg_ok "Gemte TYPESAFE_API_KEY i $ENV_FILE (chmod 600)"
+  elif env_has TYPESAFE_API_KEY; then
+    msg_ok "Beholdt TYPESAFE_API_KEY"
+  else
+    msg_warn "Ingen TYPESAFE_API_KEY. readiness fejler uden den."
+  fi
+}
+
+# --- config menu --------------------------------------------------------------
+mark() { if eval "$1" >/dev/null 2>&1; then echo "✔"; else echo "✖"; fi; }
+
+cmd_config() {
+  local choice
+  while true; do
+    choice=$(wt --title "pixi-hub LXC: konfiguration" --cancel-button "Færdig" --menu \
+      "Vælg, hvad du vil sætte op (✔ = virker)" 16 72 6 \
+      "hetzner"  "$(mark sbox_ok) Hetzner Storage Box (urdata og backup)" \
+      "secrets"  "$(mark 'env_has TYPESAFE_API_KEY') Hemmeligheder (TYPESAFE_API_KEY)" \
+      "github"   "$(mark github_ok) GitHub deploy key og pixi-hub" \
+      "obsidian" "$(mark ob_configured) Obsidian Sync" \
+      "status"   "  Vis samlet status") || break
+    case "$choice" in
+      hetzner) cmd_hetzner || true ;;
+      secrets) cmd_secrets || true ;;
+      github) cmd_github || true ;;
+      obsidian) cmd_obsidian || true ;;
+      status) cmd_status ;;
+    esac
+    read -r -p "Tryk Enter for at gå tilbage til menuen " _ </dev/tty
+  done
+}
+
 # --- status -----------------------------------------------------------------
 check() { if eval "$2" >/dev/null 2>&1; then echo -e "$CM$1"; else echo -e "$CROSS$1"; fi; }
 
@@ -159,7 +267,7 @@ cmd_status() {
   check "Config peger på $VAULT" "vault_ok"
   check "Database" "test -f '$HOME_DIR/.local/share/pixi-hub/pixi-hub.db'"
   check "age-nøgle til urdata" "test -f '$HOME_DIR/.local/share/pixi-hub/pebble-age.key'"
-  check "rclone-remote hetzner-sbox" "as_user rclone listremotes | grep -qx hetzner-sbox:"
+  check "Hetzner Storage Box (rclone-remote hetzner-sbox)" "sbox_ok"
   check "Hemmeligheder i env (TYPESAFE_API_KEY)" "grep -q '^TYPESAFE_API_KEY=.' '$HOME_DIR/.config/pixi-hub/env'"
   echo
   echo -e "${BOLD}Tjenester${CL}"
@@ -245,12 +353,15 @@ cmd_update() {
 }
 
 case "${1:-}" in
-  setup) cmd_github; cmd_obsidian; echo; cmd_status ;;
+  setup) cmd_github; cmd_obsidian; cmd_hetzner || true; cmd_secrets || true; echo; cmd_status ;;
+  config) cmd_config ;;
+  hetzner) cmd_hetzner ;;
+  secrets) cmd_secrets ;;
   github) cmd_github ;;
   obsidian) cmd_obsidian ;;
   status) cmd_status ;;
   go-live) cmd_go_live ;;
   pause) cmd_pause ;;
   update) cmd_update ;;
-  *) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

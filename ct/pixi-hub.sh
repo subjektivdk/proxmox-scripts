@@ -216,7 +216,7 @@ echo
 msg_ok "Grundinstallationen er færdig"
 echo
 if whiptail --backtitle "pixi-hub LXC" --title "Opsætning" --yesno \
-  "Vil du gøre opsætningen færdig nu?\n\n1. Deploy key til pixi-hub på GitHub\n2. Log ind på Obsidian og vælg vault (pull-only)\n\nDet kan også gøres senere i containeren med:\n  pixi-hub-lxc setup" 16 70; then
+  "Vil du gøre opsætningen færdig nu?\n\n1. Deploy key til pixi-hub på GitHub\n2. Log ind på Obsidian og vælg vault (pull-only)\n3. Hetzner Storage Box (brugernavn og password)\n4. Hemmeligheder (TYPESAFE_API_KEY)\n\nDet kan også gøres senere i containeren med menuen:\n  pixi-hub-lxc config" 19 70; then
   pct exec "$var_ctid" -- pixi-hub-lxc setup
 fi
 
@@ -225,5 +225,6 @@ msg_ok "Færdig!"
 echo -e "${INFO}${YW}Container:${CL} $var_ctid ($var_hostname) på ${BGN}${IP}${CL}"
 echo -e "${INFO}${YW}SSH:${CL}       ssh $var_user@$IP"
 echo -e "${INFO}${YW}Status:${CL}    pct exec $var_ctid -- pixi-hub-lxc status"
+echo -e "${INFO}${YW}Opsætning:${CL} pct enter $var_ctid, derefter pixi-hub-lxc config"
 echo -e "${INFO}${YW}Bemærk:${CL}    pixi-hub's scheduler er IKKE startet. Den startes først ved skiftet"
 echo -e "${TAB}${TAB}   (pixi-hub-lxc go-live), så der aldrig kører to schedulere på én gang."
