@@ -1,0 +1,18 @@
+# Beskrivelse af proxmox-scripts til den samlede dokumentation (pixi-docs).
+# Format: Backstage catalog + pixi-udvidelser, se ~/Projects/pixi-docs/docs/manifest-format.md.
+# Scripts køres af Martin selv på pve1. Agenter skriver og pusher dem, men kører dem aldrig.
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: proxmox-scripts
+  title: proxmox-scripts
+  description: Hjælpescripts i community-scripts-stil. Én linje i Proxmox-shellen opretter en LXC-container, fx til pixi-hub med Obsidian Headless Sync.
+  annotations:
+    github.com/project-slug: subjektivdk/proxmox-scripts
+    pixi.mtj.dk/runs-on: resource:pve1
+    pixi.mtj.dk/help: README.md
+spec:
+  type: scripts
+  lifecycle: experimental
+  owner: user:martin
+  system: infrastruktur
