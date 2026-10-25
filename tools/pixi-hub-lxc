@@ -171,11 +171,11 @@ cmd_hetzner() {
 
   local user host port pass obscured
   user=$(wt --title "Hetzner Storage Box" --inputbox \
-    "Brugernavn (står i Hetzner Console under Storage Box, fx u123456)" 10 70 "") || return 1
+    "Brugernavn på hovedkontoen (Hetzner Console > Storage Box, fx u123456, uden -sub)" 10 70 "") || return 1
   [[ "$user" =~ ^u[0-9]+(-sub[0-9]+)?$ ]] || { msg_error "Brugernavnet ligner ikke en Storage Box-bruger (u123456 eller u123456-sub1)."; return 1; }
   host=$(wt --title "Hetzner Storage Box" --inputbox "Server" 8 70 "${user%%-sub*}.your-storagebox.de") || return 1
   port=$(wt --title "Hetzner Storage Box" --inputbox "SSH-port (Storage Box bruger 23)" 8 70 "23") || return 1
-  pass=$(wt --title "Hetzner Storage Box" --passwordbox "Password til $user" 8 70) || return 1
+  pass=$(wt --title "Hetzner Storage Box" --passwordbox "Password til $user\n\nHovedkontoens password, ikke pixi-sync-underkontoens (-sub). Hetzner blokerer hjemmenettets IP efter flere forkerte forsøg, og så står også pixi-sync og backup stille." 12 70) || return 1
   [[ -n "$pass" ]] || { msg_error "Tomt password."; return 1; }
 
   msg_info "Gemmer rclone-remoten $SBOX_REMOTE"
