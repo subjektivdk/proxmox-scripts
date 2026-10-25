@@ -277,18 +277,37 @@ cmd_claude() {
       || { msg_ok "Beholdt CLAUDE_CODE_OAUTH_TOKEN"; return 0; }
   fi
   echo
-  echo -e "${BOLD}Log ind på Claude${CL} med dit abonnement. Åbn linket i en browser, log ind, og indsæt koden her."
-  echo -e "Til sidst viser Claude Code en token (sk-ant-oat…). Kopiér den; du bliver bedt om den bagefter."
+  echo -e "${BOLD}Log ind på Claude${CL} med dit abonnement: åbn linket i en browser, log ind, og indsæt koden her."
   echo
-  as_user "$CLAUDE" setup-token </dev/tty || { msg_error "claude setup-token fejlede."; return 1; }
-  local token
-  token=$(wt --title "Claude Code" --passwordbox "Indsæt tokenen fra claude setup-token (sk-ant-oat…)" 9 74) || return 1
+  # setup-token prints the token and exits at once, so its screen is recorded (script keeps the terminal) and the
+  # token is picked up from the recording. Only if that fails is Martin asked to paste it, in the terminal.
+  local rec token=""
+  rec=$(mktemp)
+  chmod 600 "$rec"; chown "$HUB_USER" "$rec"
+  as_user script -q -c "$CLAUDE setup-token" "$rec" </dev/tty || true
+  token=$(sed 's/\x1b\[[0-9;?]*[A-Za-z]//g' "$rec" | grep -ao 'sk-ant-oat01-[A-Za-z0-9_-]\{20,\}' | tail -n1 || true)
+  rm -f "$rec"
+  echo
+  if [[ -n "$token" ]]; then
+    msg_ok "Fandt tokenen"
+  else
+    msg_warn "Kunne ikke finde tokenen automatisk."
+    read -r -s -p "Indsæt tokenen (sk-ant-oat01-…) og tryk Enter: " token </dev/tty
+    echo
+  fi
   [[ "$token" == sk-ant-* ]] || { msg_error "Det ligner ikke en Claude-token."; return 1; }
   env_set CLAUDE_CODE_OAUTH_TOKEN "$token"
-  unset token
-  msg_ok "Gemte CLAUDE_CODE_OAUTH_TOKEN i $ENV_FILE (chmod 600)"
   msg_info "Tester claude -p med Haiku"
-  if claude_ok; then msg_ok "Claude svarer"; else msg_error "Claude svarede ikke. Tjek tokenen: pixi-hub-lxc claude"; return 1; fi
+  if ! claude_ok; then
+    # A token broken over two lines on screen is picked up only in part; it is still visible above.
+    msg_warn "Claude svarede ikke med den fundne token."
+    read -r -s -p "Kopiér tokenen fra skærmen ovenfor, indsæt den og tryk Enter: " token </dev/tty
+    echo
+    env_set CLAUDE_CODE_OAUTH_TOKEN "$token"
+    claude_ok || { msg_error "Claude svarede ikke. Prøv igen: pixi-hub-lxc claude"; return 1; }
+  fi
+  unset token
+  msg_ok "Claude svarer. Tokenen ligger i $ENV_FILE (chmod 600)"
 }
 
 # --- config menu --------------------------------------------------------------
