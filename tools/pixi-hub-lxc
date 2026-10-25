@@ -27,6 +27,11 @@ DEVICE_NAME="${DEVICE_NAME:-pixi-hub-lxc}"
 REPO_RAW="${REPO_RAW:-https://raw.githubusercontent.com/subjektivdk/proxmox-scripts/main}"
 
 # hub-update and status also work as the hub user, so a new version can be rolled out with plain ssh.
+# `update` as the hub user (e.g. after `ssh pixi-hub`) updates what that user may: pixi-hub only.
+if [[ $EUID -ne 0 && "$(id -un)" == "$HUB_USER" && "${1:-}" == update ]]; then
+  msg_warn "Som $HUB_USER opdateres kun pixi-hub. Resten kræver root: pct enter <id>, så update"
+  set -- hub-update
+fi
 [[ $EUID -eq 0 || ( "$(id -un)" == "$HUB_USER" && "${1:-}" =~ ^(hub-update|status)$ ) ]] \
   || die "Kør som root (fx: pct exec <id> -- pixi-hub-lxc $*)."
 HUB_UID=$(id -u "$HUB_USER")
