@@ -52,7 +52,12 @@ usersys() { as_user systemctl --user "$@"; }
 wt() { whiptail --backtitle "pixi-hub LXC" "$@" 3>&1 1>&2 2>&3; }
 
 # --- github -----------------------------------------------------------------
-github_ok() { as_user ssh -o BatchMode=yes -T git@github.com 2>&1 | grep -q "successfully authenticated"; }
+# GitHub always ends `ssh -T` with exit 1 (no shell access), so look at the text, not the exit code (pipefail).
+github_ok() {
+  local out
+  out=$(as_user ssh -o BatchMode=yes -T git@github.com 2>&1 || true)
+  [[ "$out" == *"successfully authenticated"* ]]
+}
 
 repo_slug() { sed -E 's#^(git@github.com:|https://github.com/)##; s#\.git$##' <<<"$HUB_REPO"; }
 
