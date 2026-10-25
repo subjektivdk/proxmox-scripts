@@ -334,7 +334,9 @@ cmd_status() {
   check "Logget ind" "ob_logged_in"
   check "Vault koblet til ($VAULT)" "ob_configured"
   check "obsidian-sync.service kører" "usersys is-active obsidian-sync.service"
-  ob_configured && ob_ sync-config --path "$VAULT" 2>/dev/null | sed "s/^/$TAB$TAB/" || true
+  if ob_configured; then
+    ob_ sync-config --path "$VAULT" 2>/dev/null | sed "s/^/$TAB$TAB/" || true
+  fi
   echo
   echo -e "${BOLD}Migrering fra pixi${CL}"
   check "Config (~/.config/pixi-hub/pixi-hub.toml)" "test -f '$HOME_DIR/.config/pixi-hub/pixi-hub.toml'"

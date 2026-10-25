@@ -60,18 +60,23 @@ fi
 loginctl enable-linger "$HUB_USER"
 msg_ok "Oprettede brugeren $HUB_USER (linger slået til)"
 
+# Installers run as the hub user without a login shell (no PAM session needed); silent shows the output on failure.
+as_hub() { (cd "$HOME_DIR" && runuser -u "$HUB_USER" -- env HOME="$HOME_DIR" USER="$HUB_USER" PATH="$HOME_DIR/.local/bin:/usr/bin:/bin" "$@"); }
+
 msg_info "Installerer uv"
-runuser -l "$HUB_USER" -c 'curl -LsSf https://astral.sh/uv/install.sh | sh' >/dev/null 2>&1 \
-  || die "uv-installationen fejlede."
-msg_ok "Installerede uv"
+silent as_hub sh -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
+msg_ok "Installerede uv $(as_hub uv --version 2>/dev/null | cut -d' ' -f2)"
 
 msg_info "Installerer Claude Code"
 # Used by readiness challengers that ask Claude (headless `claude -p`). Logged in later with `pixi-hub-lxc claude`.
-if runuser -l "$HUB_USER" -c 'curl -fsSL https://claude.ai/install.sh | bash' >/dev/null 2>&1; then
-  msg_ok "Installerede Claude Code ($(runuser -u "$HUB_USER" -- "$HOME_DIR/.local/bin/claude" --version 2>/dev/null | head -1))"
+log=$(mktemp)
+if as_hub bash -c 'curl -fsSL https://claude.ai/install.sh | bash' >"$log" 2>&1; then
+  msg_ok "Installerede Claude Code ($(as_hub "$HOME_DIR/.local/bin/claude" --version 2>/dev/null | head -1))"
 else
   msg_warn "Claude Code kunne ikke installeres. Prøv igen senere med: pixi-hub-lxc claude"
+  tail -n 15 "$log" >&2
 fi
+rm -f "$log"
 
 msg_info "Henter hubbens hemmeligheder i login-shells"
 # So `ssh pixi@pixi-hub pixi-hub ...` sees the same secrets as the systemd service (EnvironmentFile).
