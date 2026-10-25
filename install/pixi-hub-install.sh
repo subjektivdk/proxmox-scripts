@@ -65,6 +65,26 @@ runuser -l "$HUB_USER" -c 'curl -LsSf https://astral.sh/uv/install.sh | sh' >/de
   || die "uv-installationen fejlede."
 msg_ok "Installerede uv"
 
+msg_info "Installerer Claude Code"
+# Used by readiness challengers that ask Claude (headless `claude -p`). Logged in later with `pixi-hub-lxc claude`.
+if runuser -l "$HUB_USER" -c 'curl -fsSL https://claude.ai/install.sh | bash' >/dev/null 2>&1; then
+  msg_ok "Installerede Claude Code ($(runuser -u "$HUB_USER" -- "$HOME_DIR/.local/bin/claude" --version 2>/dev/null | head -1))"
+else
+  msg_warn "Claude Code kunne ikke installeres. Prøv igen senere med: pixi-hub-lxc claude"
+fi
+
+msg_info "Henter hubbens hemmeligheder i login-shells"
+# So `ssh pixi@pixi-hub pixi-hub ...` sees the same secrets as the systemd service (EnvironmentFile).
+if ! grep -q "pixi-hub/env" "$HOME_DIR/.profile" 2>/dev/null; then
+  cat >>"$HOME_DIR/.profile" <<'EOF2'
+
+# pixi-hub's secrets (the same file the systemd service reads), added by pixi-hub-lxc.
+[ -r "$HOME/.config/pixi-hub/env" ] && { set -a; . "$HOME/.config/pixi-hub/env"; set +a; }
+EOF2
+  chown "$HUB_USER:$HUB_USER" "$HOME_DIR/.profile"
+fi
+msg_ok "Login-shells læser ~/.config/pixi-hub/env"
+
 msg_info "Laver deploy key til GitHub"
 if [[ ! -f "$HOME_DIR/.ssh/pixi-hub-deploy" ]]; then
   runuser -u "$HUB_USER" -- ssh-keygen -q -t ed25519 -N "" -C "$DEVICE_NAME deploy key" -f "$HOME_DIR/.ssh/pixi-hub-deploy"

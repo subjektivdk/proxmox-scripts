@@ -6,6 +6,7 @@
 #   pixi-hub-lxc hetzner    only the Hetzner Storage Box (rclone remote hetzner-sbox)
 #   pixi-hub-lxc secrets    only the secrets in ~/.config/pixi-hub/env
 #   pixi-hub-lxc github     only the GitHub part of setup
+#   pixi-hub-lxc claude     install Claude Code and log in with a subscription token (for Claude challengers)
 #   pixi-hub-lxc obsidian   only the Obsidian part of setup
 #   pixi-hub-lxc status     what is installed, configured and running
 #   pixi-hub-lxc go-live    switch to bidirectional sync and start pixi-hub's services
@@ -243,6 +244,48 @@ cmd_secrets() {
   unset value
 }
 
+# --- claude code ----------------------------------------------------------------
+# Readiness challengers can ask Claude via headless `claude -p` with Martin's subscription. `claude setup-token`
+# makes a long-lived token, which goes into the env file as CLAUDE_CODE_OAUTH_TOKEN (read by the systemd service).
+CLAUDE="$HOME_DIR/.local/bin/claude"
+
+claude_installed() { [[ -x "$CLAUDE" ]]; }
+claude_ok() {
+  env_has CLAUDE_CODE_OAUTH_TOKEN || return 1
+  local token out
+  token=$(sed -n 's/^CLAUDE_CODE_OAUTH_TOKEN=//p' "$ENV_FILE")
+  out=$(cd /tmp && as_user env CLAUDE_CODE_OAUTH_TOKEN="$token" "$CLAUDE" -p "Svar kun: ok" --model haiku \
+    --tools "" --setting-sources "" --no-session-persistence --output-format json 2>/dev/null) || return 1
+  [[ "$(jq -r .is_error <<<"$out" 2>/dev/null)" == "false" ]]
+}
+
+cmd_claude() {
+  if ! claude_installed; then
+    msg_info "Installerer Claude Code"
+    as_user sh -c 'curl -fsSL https://claude.ai/install.sh | bash' >/dev/null 2>&1 \
+      || { msg_error "Installationen af Claude Code fejlede."; return 1; }
+  fi
+  msg_ok "Claude Code $(as_user "$CLAUDE" --version 2>/dev/null | head -1)"
+
+  if env_has CLAUDE_CODE_OAUTH_TOKEN; then
+    wt --title "Claude Code" --yesno "Der er allerede en token i env.\n\nVil du lave en ny?" 10 60 \
+      || { msg_ok "Beholdt CLAUDE_CODE_OAUTH_TOKEN"; return 0; }
+  fi
+  echo
+  echo -e "${BOLD}Log ind på Claude${CL} med dit abonnement. Åbn linket i en browser, log ind, og indsæt koden her."
+  echo -e "Til sidst viser Claude Code en token (sk-ant-oat…). Kopiér den; du bliver bedt om den bagefter."
+  echo
+  as_user "$CLAUDE" setup-token </dev/tty || { msg_error "claude setup-token fejlede."; return 1; }
+  local token
+  token=$(wt --title "Claude Code" --passwordbox "Indsæt tokenen fra claude setup-token (sk-ant-oat…)" 9 74) || return 1
+  [[ "$token" == sk-ant-* ]] || { msg_error "Det ligner ikke en Claude-token."; return 1; }
+  env_set CLAUDE_CODE_OAUTH_TOKEN "$token"
+  unset token
+  msg_ok "Gemte CLAUDE_CODE_OAUTH_TOKEN i $ENV_FILE (chmod 600)"
+  msg_info "Tester claude -p med Haiku"
+  if claude_ok; then msg_ok "Claude svarer"; else msg_error "Claude svarede ikke. Tjek tokenen: pixi-hub-lxc claude"; return 1; fi
+}
+
 # --- config menu --------------------------------------------------------------
 secrets_ok() {
   local entry
@@ -260,12 +303,14 @@ cmd_config() {
       "secrets"  "$(mark secrets_ok) Hemmeligheder (Jev, Eloverblik, Easee)" \
       "github"   "$(mark github_ok) GitHub deploy key og pixi-hub" \
       "obsidian" "$(mark ob_configured) Obsidian Sync" \
+      "claude"   "$(mark 'env_has CLAUDE_CODE_OAUTH_TOKEN') Claude Code (challengers med Claude)" \
       "status"   "  Vis samlet status") || break
     case "$choice" in
       hetzner) cmd_hetzner || true ;;
       secrets) cmd_secrets || true ;;
       github) cmd_github || true ;;
       obsidian) cmd_obsidian || true ;;
+      claude) cmd_claude || true ;;
       status) cmd_status ;;
     esac
     read -r -p "Tryk Enter for at gå tilbage til menuen " _ </dev/tty
@@ -307,9 +352,8 @@ cmd_status() {
   echo -e "${BOLD}Kilder${CL}"
   check "Zabbix nås (${ZBX:-$(zbx_server)}:10051)" "zbx_ok"
   check "tasks_command kan køres" "tasks_ok"
-  if grep -q 'probability_source *= *"claude' "$CONF" 2>/dev/null; then
-    check "claude CLI (challengeren claude-sonnet)" "as_user sh -c 'command -v claude'"
-  fi
+  check "Claude Code installeret" "claude_installed"
+  check "Claude-token i env (CLAUDE_CODE_OAUTH_TOKEN)" "env_has CLAUDE_CODE_OAUTH_TOKEN"
   echo
   echo -e "${BOLD}Tjenester${CL}"
   local u
@@ -418,6 +462,12 @@ cmd_update() {
   done
   msg_ok "Opdaterede scripts"
 
+  if claude_installed; then
+    msg_info "Opdaterer Claude Code"
+    silent as_user "$CLAUDE" update || true
+    msg_ok "Claude Code $(as_user "$CLAUDE" --version 2>/dev/null | head -1)"
+  fi
+
   if [[ -d "$HUB_SRC/.git" ]] && github_ok; then
     cmd_hub_update update --force
   else
@@ -432,16 +482,17 @@ cmd_update() {
 }
 
 case "${1:-}" in
-  setup) cmd_github; cmd_obsidian; cmd_hetzner || true; cmd_secrets || true; echo; cmd_status ;;
+  setup) cmd_github; cmd_obsidian; cmd_hetzner || true; cmd_secrets || true; cmd_claude || true; echo; cmd_status ;;
   config) cmd_config ;;
   hetzner) cmd_hetzner ;;
   secrets) cmd_secrets ;;
   github) cmd_github ;;
   obsidian) cmd_obsidian ;;
+  claude) cmd_claude ;;
   status) cmd_status ;;
   go-live) cmd_go_live ;;
   pause) cmd_pause ;;
   update) cmd_update ;;
   hub-update) cmd_hub_update "$@" ;;
-  *) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

@@ -16,12 +16,13 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/subjektivdk/proxmox-scri
 
 ### Hvad scriptet gør
 1. Henter `debian-13-standard`-templaten, hvis den mangler, og opretter og starter containeren (`nesting=1`).
-2. Installerer Node.js 24 LTS, `obsidian-headless` (`ob`), `uv`, `rclone`, `rsync` (til hubbens backup), `age` og brugeren `pixi` med linger. Det laver også en **deploy key** og `obsidian-sync.service`.
+2. Installerer Node.js 24 LTS, `obsidian-headless` (`ob`), `uv`, `rclone`, `rsync` (til hubbens backup), `age`, Claude Code og brugeren `pixi` med linger. Login-shells læser hubbens `env`, så `ssh pixi@pixi-hub pixi-hub …` har de samme hemmeligheder som tjenesten. Det laver også en **deploy key** og `obsidian-sync.service`.
 3. Spørger, om opsætningen skal gøres færdig nu (`pixi-hub-lxc setup`):
    - viser deploy key'en, som du tilføjer som **read-only** på GitHub, og kloner og installerer så pixi-hub (`uv tool install …[jev]`)
    - `ob login` (e-mail, password, 2FA), vælg vault, og E2EE-password, hvis vaultet er end-to-end-krypteret
    - starter sync i **pull-only**, kun noter (ingen vedhæftninger, ingen `.obsidian`-config)
    - **Hetzner Storage Box**: brugernavn og password. Det gemmes som rclone-remoten `hetzner-sbox` (passwordet bliver obscured via stdin og havner ikke i historikken), og forbindelsen testes med det samme
+   - **Claude Code** (valgfrit): `claude setup-token` med dit abonnement; tokenen gemmes som `CLAUDE_CODE_OAUTH_TOKEN` i `env` og testes med Haiku. Bruges kun af readiness-challengers, der spørger Claude
    - **hemmeligheder** til `~/.config/pixi-hub/env` (chmod 600): `TYPESAFE_API_KEY` (Jev), `ELOVERBLIK_REFRESH_TOKEN` og `EASEE_USERNAME`/`EASEE_PASSWORD` (electricity). Tom = behold den gamle værdi.
 
 **pixi-hub's scheduler startes ikke.** Det sker først med `pixi-hub-lxc go-live`, så hubben aldrig kører to steder på én gang.
@@ -31,6 +32,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/subjektivdk/proxmox-scri
 |---|---|
 | `pixi-hub-lxc status` | Hvad er installeret, sat op, migreret og kørende |
 | `pixi-hub-lxc config` | **Menu** med ✔/✖ for Hetzner, hemmeligheder, GitHub og Obsidian. Vælg det, der mangler |
+| `pixi-hub-lxc claude` | Installerer Claude Code og logger ind med en abonnements-token |
 | `pixi-hub-lxc hub-update` | Kun pixi-hub: `git pull` fra main, installerer og genstarter hubben. Virker også som brugeren `pixi` over ssh |
 | `pixi-hub-lxc setup` | Det hele i rækkefølge: GitHub, Obsidian, Hetzner, hemmeligheder (kan køres igen) |
 | `pixi-hub-lxc hetzner` / `secrets` / `github` / `obsidian` | Kun den ene del |
