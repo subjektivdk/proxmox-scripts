@@ -50,6 +50,8 @@ jobs:
           docker exec ct pixi-hub-lxc status
           docker exec ct env -i PATH=/sbin:/bin:/usr/sbin:/usr/bin pixi-hub-lxc status >/dev/null
           docker exec ct test -x /usr/bin/update
+          docker exec ct runuser -u pixi -- pixi-hub-lxc help | grep -q 'pixi-hub tui'
+          docker exec ct runuser -u pixi -- bash -ic 'type help' | grep -q 'pixi-hub-lxc help'
           docker exec ct which rsync
           docker exec ct test -x /usr/local/bin/pixi-hub
           docker exec ct test -x /home/pixi/.local/bin/claude

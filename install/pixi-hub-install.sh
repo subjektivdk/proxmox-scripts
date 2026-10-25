@@ -158,6 +158,7 @@ cat >/usr/bin/update <<'EOF2'
 exec /usr/local/bin/pixi-hub-lxc update "$@"
 EOF2
 chmod 0755 /usr/bin/update
+/usr/bin/pixi-hub-lxc shell-help  # `help` at the prompt
 msg_ok "Installerede pixi-hub-lxc"
 
 msg_info "Rydder op"

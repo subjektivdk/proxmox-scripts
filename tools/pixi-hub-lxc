@@ -13,6 +13,7 @@
 #   pixi-hub-lxc pause      stop pixi-hub's services (sync keeps running) - e.g. to roll back to pixi
 #   pixi-hub-lxc update     Debian, obsidian-headless, these scripts and pixi-hub
 #   pixi-hub-lxc hub-update only pixi-hub: pull main, install, restart (also as the hub user, e.g. over ssh)
+#   pixi-hub-lxc help       the commands in this container, in Danish (also `help` at the prompt, as any user)
 #
 # License: MIT
 set -Eeuo pipefail
@@ -32,7 +33,7 @@ if [[ $EUID -ne 0 && "$(id -un)" == "$HUB_USER" && "${1:-}" == update ]]; then
   msg_warn "Som $HUB_USER opdateres kun pixi-hub. Resten kræver root: pct enter <id>, så update"
   set -- hub-update
 fi
-[[ $EUID -eq 0 || ( "$(id -un)" == "$HUB_USER" && "${1:-}" =~ ^(hub-update|status)$ ) ]] \
+[[ $EUID -eq 0 || ( "$(id -un)" == "$HUB_USER" && "${1:-}" =~ ^(hub-update|status|help)$ ) ]] \
   || die "Kør som root (fx: pct exec <id> -- pixi-hub-lxc $*)."
 HUB_UID=$(id -u "$HUB_USER")
 HOME_DIR=$(getent passwd "$HUB_USER" | cut -d: -f6)
@@ -443,6 +444,44 @@ cmd_pause() {
   msg_ok "pixi-hub stoppet (obsidian-sync kører videre)"
 }
 
+# --- help -------------------------------------------------------------------------
+cmd_help() {
+  echo -e "${BOLD}pixi-hub${CL}"
+  cat <<EOF
+  pixi-hub tui                  TUI'en (readiness, moduler, modelrapporter)
+  pixi-hub status               config, vault og seneste hændelser
+  pixi-hub log                  hændelser, nyeste først
+  pixi-hub run <modul>          kør et modul nu (--dry-run viser kun ændringen)
+  pixi-hub --help               alle pixi-hub-kommandoer
+  journalctl --user -u pixi-hub -f   følg hubbens log (som $HUB_USER)
+EOF
+  echo -e "\n${BOLD}Containeren${CL}"
+  cat <<EOF
+  pixi-hub-lxc status           hvad er installeret, sat op og kører
+  update                        som $HUB_USER: ny pixi-hub fra GitHub; som root: også Debian, Obsidian og scripts
+  pixi-hub-lxc hub-update       kun pixi-hub (det samme som update som $HUB_USER)
+EOF
+  echo -e "\n${BOLD}Kun som root${CL} (pct enter <id> på pve1)"
+  cat <<EOF
+  pixi-hub-lxc config           menu: Hetzner, hemmeligheder, GitHub, Obsidian, Claude
+  pixi-hub-lxc claude           ny Claude-token
+  pixi-hub-lxc pause            stop hubben (Obsidian-sync kører videre)
+  pixi-hub-lxc go-live          start hubben (kun når den ikke kører på pixi)
+EOF
+}
+
+# `help` at the prompt shows cmd_help (help <word> is still bash's own help); a new login says so once.
+SHELL_HELP=/etc/pixi-hub-lxc.bashrc
+cmd_shell_help() {
+  cat >"$SHELL_HELP" <<'EOF'
+# pixi-hub-lxc (proxmox-scripts): `help` lists the container's commands; `help <word>` is bash's own help.
+case $- in *i*) ;; *) return ;; esac
+help() { if (($#)); then builtin help "$@"; else pixi-hub-lxc help; fi; }
+[[ -n "${PIXI_HUB_HINT:-}" ]] || { export PIXI_HUB_HINT=1; echo "pixi-hub: skriv help for at se kommandoerne"; }
+EOF
+  grep -qF "$SHELL_HELP" /etc/bash.bashrc || echo "[ -r $SHELL_HELP ] && . $SHELL_HELP" >>/etc/bash.bashrc
+}
+
 # --- hub-update -----------------------------------------------------------------
 # The way new code reaches the container: develop and test on pixi, push to main, then
 #   ssh pixi-hub pixi-hub-lxc hub-update
@@ -492,6 +531,7 @@ cmd_update() {
     rm -f "$tmp"
   done
   ln -sf /opt/pixi-hub-lxc/tools/pixi-hub-lxc /usr/bin/pixi-hub-lxc  # pct exec has no /usr/local/bin in PATH
+  cmd_shell_help
   msg_ok "Opdaterede scripts"
 
   if claude_installed; then
@@ -526,5 +566,7 @@ case "${1:-}" in
   pause) cmd_pause ;;
   update) cmd_update ;;
   hub-update) cmd_hub_update "$@" ;;
+  help) cmd_help ;;
+  shell-help) cmd_shell_help ;;
   *) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

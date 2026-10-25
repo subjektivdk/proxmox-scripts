@@ -39,6 +39,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/subjektivdk/proxmox-scri
 | `pixi-hub-lxc go-live` | Tjekker at config, database og vault er på plads, skifter sync til bidirectional og starter pixi-hub, pebble- og backup-timeren |
 | `pixi-hub-lxc pause` | Stopper pixi-hub igen (sync kører videre), fx for at rulle tilbage |
 | `update` / `pixi-hub-lxc update` | Debian, obsidian-headless, disse scripts og pixi-hub. `update` virker som i community-scripts' containere. Som `pixi` (over ssh) opdaterer den kun pixi-hub |
+| `help` | Kommandoerne i containeren, på dansk (`help <ord>` er stadig bashs egen hjælp). Nye shells nævner den én gang |
 
 `status` viser også, om Zabbix kan nås, om `tasks_command` findes, og om `claude` findes (kun hvis en challenger bruger den). Fra Proxmox-værten: `pct exec <id> -- pixi-hub-lxc status`. Kører du `ct/pixi-hub.sh` inde i containeren, opdaterer den.
 
