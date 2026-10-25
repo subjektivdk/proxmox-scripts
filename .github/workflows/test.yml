@@ -41,6 +41,7 @@ jobs:
         run: |
           docker exec ct node --version
           docker exec ct ob --help >/dev/null
+          docker exec ct sh -c 'cd /usr/lib/node_modules/obsidian-headless && node -e "require(\"better-sqlite3\")(\":memory:\")"'
           docker exec ct runuser -u pixi -- /home/pixi/.local/bin/uv --version
           docker exec ct test -f /home/pixi/.ssh/pixi-hub-deploy.pub
           docker exec ct test -f /home/pixi/.config/systemd/user/obsidian-sync.service

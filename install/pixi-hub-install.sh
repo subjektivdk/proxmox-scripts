@@ -36,7 +36,7 @@ silent apt-get install -y nodejs
 msg_ok "Installerede Node.js $(node --version)"
 
 msg_info "Installerer obsidian-headless"
-silent npm install -g obsidian-headless
+silent npm install -g --allow-scripts=better-sqlite3 obsidian-headless
 msg_ok "Installerede obsidian-headless $(npm ls -g obsidian-headless --depth=0 2>/dev/null | grep -o '@[0-9.]*' | tr -d @)"
 
 msg_info "Opretter brugeren $HUB_USER"
@@ -47,6 +47,8 @@ HOME_DIR=$(getent passwd "$HUB_USER" | cut -d: -f6)
 install -d -m 0700 -o "$HUB_USER" -g "$HUB_USER" "$HOME_DIR/.ssh" "$HOME_DIR/.config/pixi-hub"
 install -d -o "$HUB_USER" -g "$HUB_USER" "$HOME_DIR/Projects" "$HOME_DIR/vault" \
   "$HOME_DIR/.config/systemd/user" "$HOME_DIR/.local/share/pixi-hub"
+# install -d makes the parents (~/.local, ~/.config/systemd ...) as root; the user must own them (uv, Claude Code).
+chown -R "$HUB_USER:$HUB_USER" "$HOME_DIR/.local" "$HOME_DIR/.config"
 if [[ -n "${SSH_KEY:-}" ]] && ! grep -qF "$SSH_KEY" "$HOME_DIR/.ssh/authorized_keys" 2>/dev/null; then
   printf '%s\n' "$SSH_KEY" >>"$HOME_DIR/.ssh/authorized_keys"
 fi

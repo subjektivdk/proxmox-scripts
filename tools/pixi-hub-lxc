@@ -452,7 +452,7 @@ cmd_update() {
   msg_ok "Opdaterede Debian"
 
   msg_info "Opdaterer obsidian-headless"
-  silent npm install -g obsidian-headless@latest
+  silent npm install -g --allow-scripts=better-sqlite3 obsidian-headless@latest
   msg_ok "Opdaterede obsidian-headless"
 
   msg_info "Opdaterer pixi-hub-lxc-scripts"
