@@ -16,7 +16,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/subjektivdk/proxmox-scri
 
 ### Hvad scriptet gør
 1. Henter `debian-13-standard`-templaten, hvis den mangler, og opretter og starter containeren (`nesting=1`).
-2. Installerer Node.js 24 LTS, `obsidian-headless` (`ob`), `uv`, `rclone`, `rsync` (til hubbens backup), `age`, Claude Code og brugeren `pixi` med linger. Login-shells læser hubbens `env`, så `ssh pixi@pixi-hub pixi-hub …` har de samme hemmeligheder som tjenesten. Det laver også en **deploy key** og `obsidian-sync.service`.
+2. Installerer Node.js 24 LTS, `obsidian-headless` (`ob`), `uv`, `rclone`, `rsync` (til hubbens backup), `age`, Claude Code og brugeren `pixi` med linger. Login-shells læser hubbens `env`, og `/usr/local/bin/pixi-hub` gør det samme for kommandoer over ssh, så `ssh pixi@pixi-hub pixi-hub …` har de samme hemmeligheder som tjenesten (og `nano` som editor i TUI'en). Det laver også en **deploy key** og `obsidian-sync.service`.
 3. Spørger, om opsætningen skal gøres færdig nu (`pixi-hub-lxc setup`):
    - viser deploy key'en, som du tilføjer som **read-only** på GitHub, og kloner og installerer så pixi-hub (`uv tool install …[jev]`)
    - `ob login` (e-mail, password, 2FA), vælg vault, og E2EE-password, hvis vaultet er end-to-end-krypteret
@@ -51,6 +51,12 @@ Alt hentes fra **GitHub**: pixi-hub med `git pull` (read-only deploy key) og dis
 4. Rul tilbage: `git revert` på pixi, push, og kør `hub-update` igen.
 
 Config og data bor i containeren, så du ændrer dem dér: `ssh pixi@pixi-hub pixi-hub config set …` (laver stadig git-commits i `~/.config/pixi-hub`). Debian og obsidian-headless opdateres med `update` en gang imellem. Der er ingen automatisk udrulning: en fejl pushet om aftenen skal ikke ramme 05:00-briefen.
+
+### Baren og TUI'en på pixi
+Omarchy-pluginet i pixi-hub (`deploy/omarchy/`) virker også, når hubben kører her ([pixi-hub#16](https://github.com/subjektivdk/pixi-hub/issues/16)):
+- Sæt pluginets **pixi-hub command** til `~/Projects/pixi-hub/deploy/omarchy/pixi-hub-remote` og **Obsidian-vault** til vaultets navn på pixi. `pixi-hub-remote` kører `pixi-hub` her over ssh (`PIXI_HUB_HOST`, standard `pixi@pixi-hub`) med én delt forbindelse.
+- Klik åbner TUI'en over `ssh -t`; højreklik åbner statusnoten i pixi's egen Obsidian.
+- pixi skal kunne logge ind som `pixi` med nøgle (sæt den med **Avanceret → SSH-nøgle**, når containeren oprettes).
 
 ### Det gør scriptet ikke
 Hubbens **data** flyttes ikke: config, `env`, database, `imports/`, `last-backup` og age-nøglen til urdata. Det er en del af selve skiftet, se [pixi-hub#18](https://github.com/subjektivdk/pixi-hub/issues/18). `status` viser, hvad der mangler.

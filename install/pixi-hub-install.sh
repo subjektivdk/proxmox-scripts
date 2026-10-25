@@ -85,6 +85,19 @@ EOF2
 fi
 msg_ok "Login-shells læser ~/.config/pixi-hub/env"
 
+msg_info "Installerer pixi-hub-kommandoen til ssh"
+# `ssh pixi@pixi-hub pixi-hub ...` (the bar and TUI on pixi, pixi-hub#16) runs without a login shell, so neither
+# ~/.local/bin nor the secrets are there. This wrapper gives it both, and an editor for the TUI's config screen.
+cat >/usr/local/bin/pixi-hub <<'EOF2'
+#!/bin/sh
+# pixi-hub with the hub's secrets and an editor, also over non-interactive ssh (proxmox-scripts).
+[ -r "$HOME/.config/pixi-hub/env" ] && { set -a; . "$HOME/.config/pixi-hub/env"; set +a; }
+: "${EDITOR:=nano}"; export EDITOR
+exec "$HOME/.local/bin/pixi-hub" "$@"
+EOF2
+chmod 0755 /usr/local/bin/pixi-hub
+msg_ok "pixi-hub virker også over ssh uden login-shell"
+
 msg_info "Laver deploy key til GitHub"
 if [[ ! -f "$HOME_DIR/.ssh/pixi-hub-deploy" ]]; then
   runuser -u "$HUB_USER" -- ssh-keygen -q -t ed25519 -N "" -C "$DEVICE_NAME deploy key" -f "$HOME_DIR/.ssh/pixi-hub-deploy"
