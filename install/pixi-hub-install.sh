@@ -20,7 +20,7 @@ msg_ok "Opdaterede Debian"
 msg_info "Installerer pakker"
 silent apt-get install -y --no-install-recommends \
   ca-certificates curl gnupg git sudo openssh-server locales \
-  rclone age jq sqlite3 whiptail dbus-user-session less nano
+  rclone rsync age jq sqlite3 whiptail dbus-user-session less nano
 sed -i 's/^# *\(en_US.UTF-8\)/\1/; s/^# *\(da_DK.UTF-8\)/\1/' /etc/locale.gen
 silent locale-gen
 update-locale LANG=en_US.UTF-8
@@ -109,6 +109,13 @@ DEVICE_NAME="$DEVICE_NAME"
 REPO_RAW="${REPO_RAW:-https://raw.githubusercontent.com/subjektivdk/proxmox-scripts/main}"
 EOF
 ln -sf /opt/pixi-hub-lxc/tools/pixi-hub-lxc /usr/local/bin/pixi-hub-lxc
+# "update" in the container, as in the community-scripts LXCs.
+cat >/usr/bin/update <<'EOF2'
+#!/usr/bin/env bash
+# Updates Debian, obsidian-headless, the pixi-hub-lxc scripts and pixi-hub (proxmox-scripts).
+exec /usr/local/bin/pixi-hub-lxc update "$@"
+EOF2
+chmod 0755 /usr/bin/update
 msg_ok "Installerede pixi-hub-lxc"
 
 msg_info "Rydder op"

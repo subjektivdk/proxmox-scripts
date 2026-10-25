@@ -11,6 +11,7 @@
 #   pixi-hub-lxc go-live    switch to bidirectional sync and start pixi-hub's services
 #   pixi-hub-lxc pause      stop pixi-hub's services (sync keeps running) - e.g. to roll back to pixi
 #   pixi-hub-lxc update     Debian, obsidian-headless, these scripts and pixi-hub
+#   pixi-hub-lxc hub-update only pixi-hub: pull main, install, restart (also as the hub user, e.g. over ssh)
 #
 # License: MIT
 set -Eeuo pipefail
@@ -24,7 +25,9 @@ HUB_REPO="${HUB_REPO:-git@github.com:subjektivdk/pixi-hub.git}"
 DEVICE_NAME="${DEVICE_NAME:-pixi-hub-lxc}"
 REPO_RAW="${REPO_RAW:-https://raw.githubusercontent.com/subjektivdk/proxmox-scripts/main}"
 
-[[ $EUID -eq 0 ]] || die "Kør som root (fx: pct exec <id> -- pixi-hub-lxc $*)."
+# hub-update and status also work as the hub user, so a new version can be rolled out with plain ssh.
+[[ $EUID -eq 0 || ( "$(id -un)" == "$HUB_USER" && "${1:-}" =~ ^(hub-update|status)$ ) ]] \
+  || die "Kør som root (fx: pct exec <id> -- pixi-hub-lxc $*)."
 HUB_UID=$(id -u "$HUB_USER")
 HOME_DIR=$(getent passwd "$HUB_USER" | cut -d: -f6)
 VAULT="$HOME_DIR/vault"
@@ -33,6 +36,11 @@ HUB_UNITS=(pixi-hub.service pixi-hub-pebble.timer pixi-hub-backup.timer)
 
 # Run a command as the hub user with a proper home and access to its systemd user instance.
 as_user() {
+  if [[ $EUID -ne 0 ]]; then
+    env XDG_RUNTIME_DIR="/run/user/$HUB_UID" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$HUB_UID/bus" \
+      PATH="$HOME_DIR/.local/bin:$PATH" "$@"
+    return
+  fi
   runuser -u "$HUB_USER" -- env HOME="$HOME_DIR" USER="$HUB_USER" \
     PATH="$HOME_DIR/.local/bin:/usr/local/bin:/usr/bin:/bin" \
     XDG_RUNTIME_DIR="/run/user/$HUB_UID" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$HUB_UID/bus" \
@@ -204,22 +212,43 @@ env_set() {
   rm -f "$tmp"
 }
 
+# KEY|what it is for|text or password. Only TYPESAFE_API_KEY is needed for the notes; the rest are for electricity.
+SECRETS=(
+  "TYPESAFE_API_KEY|readiness: Jev-probability (uden den fejler readiness)|password"
+  "ELOVERBLIK_REFRESH_TOKEN|electricity: gårsdagens forbrug (eloverblik.dk > Datadeling > Opret token)|password"
+  "EASEE_USERNAME|electricity: ladeplanen (samme login som Easee-appen)|text"
+  "EASEE_PASSWORD|electricity: ladeplanen (password til Easee)|password"
+)
+
 cmd_secrets() {
-  local value text
-  text="TYPESAFE_API_KEY bruges af readiness til Jev-probability."
-  env_has TYPESAFE_API_KEY && text+="\n\nDer er allerede en nøgle. Tom = behold den."
-  value=$(wt --title "Hemmeligheder" --passwordbox "$text" 12 70) || return 1
-  if [[ -n "$value" ]]; then
-    env_set TYPESAFE_API_KEY "$value"
-    msg_ok "Gemte TYPESAFE_API_KEY i $ENV_FILE (chmod 600)"
-  elif env_has TYPESAFE_API_KEY; then
-    msg_ok "Beholdt TYPESAFE_API_KEY"
-  else
-    msg_warn "Ingen TYPESAFE_API_KEY. readiness fejler uden den."
-  fi
+  local entry key desc kind text value
+  for entry in "${SECRETS[@]}"; do
+    IFS="|" read -r key desc kind <<<"$entry"
+    text="$key\n\n$desc"
+    env_has "$key" && text+="\n\nDer er allerede en værdi. Tom = behold den."
+    if [[ "$kind" == "text" ]]; then
+      value=$(wt --title "Hemmeligheder" --inputbox "$text" 14 74 "") || return 1
+    else
+      value=$(wt --title "Hemmeligheder" --passwordbox "$text" 14 74) || return 1
+    fi
+    if [[ -n "$value" ]]; then
+      env_set "$key" "$value"
+      msg_ok "Gemte $key i $ENV_FILE (chmod 600)"
+    elif env_has "$key"; then
+      msg_ok "Beholdt $key"
+    else
+      msg_warn "Ingen $key (${desc%%:*} mangler den)"
+    fi
+  done
+  unset value
 }
 
 # --- config menu --------------------------------------------------------------
+secrets_ok() {
+  local entry
+  for entry in "${SECRETS[@]}"; do env_has "${entry%%|*}" || return 1; done
+}
+
 mark() { if eval "$1" >/dev/null 2>&1; then echo "✔"; else echo "✖"; fi; }
 
 cmd_config() {
@@ -228,7 +257,7 @@ cmd_config() {
     choice=$(wt --title "pixi-hub LXC: konfiguration" --cancel-button "Færdig" --menu \
       "Vælg, hvad du vil sætte op (✔ = virker)" 16 72 6 \
       "hetzner"  "$(mark sbox_ok) Hetzner Storage Box (urdata og backup)" \
-      "secrets"  "$(mark 'env_has TYPESAFE_API_KEY') Hemmeligheder (TYPESAFE_API_KEY)" \
+      "secrets"  "$(mark secrets_ok) Hemmeligheder (Jev, Eloverblik, Easee)" \
       "github"   "$(mark github_ok) GitHub deploy key og pixi-hub" \
       "obsidian" "$(mark ob_configured) Obsidian Sync" \
       "status"   "  Vis samlet status") || break
@@ -268,13 +297,38 @@ cmd_status() {
   check "Database" "test -f '$HOME_DIR/.local/share/pixi-hub/pixi-hub.db'"
   check "age-nøgle til urdata" "test -f '$HOME_DIR/.local/share/pixi-hub/pebble-age.key'"
   check "Hetzner Storage Box (rclone-remote hetzner-sbox)" "sbox_ok"
-  check "Hemmeligheder i env (TYPESAFE_API_KEY)" "grep -q '^TYPESAFE_API_KEY=.' '$HOME_DIR/.config/pixi-hub/env'"
+  check "Rå eksporter (imports/ til history)" "test -d '$HOME_DIR/.local/share/pixi-hub/imports'"
+  check "Backup-stempel (last-backup, Zabbix måler alderen)" "test -f '$HOME_DIR/.local/share/pixi-hub/last-backup'"
+  local entry
+  for entry in "${SECRETS[@]}"; do
+    check "${entry%%|*} i env" "env_has ${entry%%|*}"
+  done
+  echo
+  echo -e "${BOLD}Kilder${CL}"
+  check "Zabbix nås (${ZBX:-$(zbx_server)}:10051)" "zbx_ok"
+  check "tasks_command kan køres" "tasks_ok"
+  if grep -q 'probability_source *= *"claude' "$CONF" 2>/dev/null; then
+    check "claude CLI (challengeren claude-sonnet)" "as_user sh -c 'command -v claude'"
+  fi
   echo
   echo -e "${BOLD}Tjenester${CL}"
   local u
   for u in "${HUB_UNITS[@]}"; do
     check "$u ($(usersys is-active "$u" 2>/dev/null || true))" "usersys is-active $u"
   done
+}
+
+CONF="$HOME_DIR/.config/pixi-hub/pixi-hub.toml"
+
+# A string setting from one [section] of the hub's config (enough for these checks; pixi-hub parses it properly).
+conf_get() {
+  awk -v sec="[$1]" -v key="$2" '/^\[/{s=($0==sec)} s && $1==key {sub(/^[^=]*= *"/,""); sub(/".*/,""); print; exit}' "$CONF" 2>/dev/null
+}
+zbx_server() { conf_get modules.zabbix server; }
+zbx_ok() { local s; s=$(zbx_server); [[ -n "$s" ]] && timeout 5 bash -c "</dev/tcp/$s/10051"; }
+tasks_ok() {
+  local cmd; cmd=$(conf_get modules.brief tasks_command)
+  [[ -n "$cmd" ]] && as_user sh -c "command -v '${cmd%% *}'"
 }
 
 vault_ok() {
@@ -314,6 +368,35 @@ cmd_pause() {
   msg_ok "pixi-hub stoppet (obsidian-sync kører videre)"
 }
 
+# --- hub-update -----------------------------------------------------------------
+# The way new code reaches the container: develop and test on pixi, push to main, then
+#   ssh pixi-hub pixi-hub-lxc hub-update
+cmd_hub_update() {
+  [[ -d "$HUB_SRC/.git" ]] || die "pixi-hub er ikke klonet endnu (pixi-hub-lxc github)."
+  local before after
+  before=$(as_user git -C "$HUB_SRC" rev-parse --short HEAD)
+  msg_info "Henter pixi-hub"
+  silent as_user git -C "$HUB_SRC" pull --ff-only
+  after=$(as_user git -C "$HUB_SRC" rev-parse --short HEAD)
+  if [[ "$before" == "$after" ]]; then
+    msg_ok "pixi-hub er allerede opdateret ($after)"
+    [[ "${2:-}" == "--force" ]] || return 0
+  else
+    msg_ok "pixi-hub $before → $after"
+    as_user git -C "$HUB_SRC" log --format="${TAB}${TAB}%h %s" "$before..$after"
+  fi
+  install_hub
+  if usersys is-active pixi-hub.service >/dev/null 2>&1; then
+    usersys restart pixi-hub.service
+    sleep 3
+    usersys is-active pixi-hub.service >/dev/null 2>&1 \
+      || die "pixi-hub startede ikke igen. Se: journalctl --user -u pixi-hub -n 50"
+    msg_ok "Genstartede pixi-hub"
+  else
+    msg_warn "pixi-hub kører ikke her (før go-live), så den er ikke genstartet"
+  fi
+}
+
 # --- update -------------------------------------------------------------------
 cmd_update() {
   msg_info "Opdaterer Debian"
@@ -336,20 +419,16 @@ cmd_update() {
   msg_ok "Opdaterede scripts"
 
   if [[ -d "$HUB_SRC/.git" ]] && github_ok; then
-    msg_info "Opdaterer pixi-hub"
-    silent as_user git -C "$HUB_SRC" pull --ff-only
-    install_hub
+    cmd_hub_update update --force
   else
     msg_warn "Sprang pixi-hub over (ikke klonet eller ingen GitHub-adgang)"
   fi
 
-  local u
-  for u in obsidian-sync.service pixi-hub.service; do
-    if usersys is-active "$u" >/dev/null 2>&1; then
-      usersys restart "$u"
-      msg_ok "Genstartede $u"
-    fi
-  done
+  # pixi-hub itself was restarted by hub-update.
+  if usersys is-active obsidian-sync.service >/dev/null 2>&1; then
+    usersys restart obsidian-sync.service
+    msg_ok "Genstartede obsidian-sync.service"
+  fi
 }
 
 case "${1:-}" in
@@ -363,5 +442,6 @@ case "${1:-}" in
   go-live) cmd_go_live ;;
   pause) cmd_pause ;;
   update) cmd_update ;;
-  *) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  hub-update) cmd_hub_update "$@" ;;
+  *) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

@@ -47,4 +47,7 @@ jobs:
           docker exec ct stat -c '%a %U' /home/pixi/.config/pixi-hub/env | grep -qx '600 pixi'
           docker exec ct loginctl show-user pixi --property=Linger | grep -qx Linger=yes
           docker exec ct pixi-hub-lxc status
+          docker exec ct test -x /usr/bin/update
+          docker exec ct which rsync
+          docker exec ct runuser -u pixi -- pixi-hub-lxc status
           docker exec ct runuser -u pixi -- env XDG_RUNTIME_DIR=/run/user/1000 systemctl --user cat obsidian-sync.service
