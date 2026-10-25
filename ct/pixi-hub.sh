@@ -217,7 +217,7 @@ msg_ok "Grundinstallationen er færdig"
 echo
 if whiptail --backtitle "pixi-hub LXC" --title "Opsætning" --yesno \
   "Vil du gøre opsætningen færdig nu?\n\n1. Deploy key til pixi-hub på GitHub\n2. Log ind på Obsidian og vælg vault (pull-only)\n3. Hetzner Storage Box (brugernavn og password)\n4. Hemmeligheder (TYPESAFE_API_KEY)\n\nDet kan også gøres senere i containeren med menuen:\n  pixi-hub-lxc config" 19 70; then
-  pct exec "$var_ctid" -- pixi-hub-lxc setup
+  pct exec "$var_ctid" -- /usr/bin/pixi-hub-lxc setup
 fi
 
 echo

@@ -149,6 +149,8 @@ DEVICE_NAME="$DEVICE_NAME"
 REPO_RAW="${REPO_RAW:-https://raw.githubusercontent.com/subjektivdk/proxmox-scripts/main}"
 EOF
 ln -sf /opt/pixi-hub-lxc/tools/pixi-hub-lxc /usr/local/bin/pixi-hub-lxc
+# Also in /usr/bin: `pct exec` runs with PATH=/sbin:/bin:/usr/sbin:/usr/bin (no /usr/local/bin).
+ln -sf /opt/pixi-hub-lxc/tools/pixi-hub-lxc /usr/bin/pixi-hub-lxc
 # "update" in the container, as in the community-scripts LXCs.
 cat >/usr/bin/update <<'EOF2'
 #!/usr/bin/env bash

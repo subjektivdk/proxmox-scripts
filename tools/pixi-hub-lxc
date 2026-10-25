@@ -462,6 +462,7 @@ cmd_update() {
     curl -fsSL "$REPO_RAW/$f" -o "$tmp" && install -m 0755 "$tmp" "/opt/pixi-hub-lxc/$f"
     rm -f "$tmp"
   done
+  ln -sf /opt/pixi-hub-lxc/tools/pixi-hub-lxc /usr/bin/pixi-hub-lxc  # pct exec has no /usr/local/bin in PATH
   msg_ok "Opdaterede scripts"
 
   if claude_installed; then
