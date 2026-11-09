@@ -468,6 +468,8 @@ EOF
   pixi-hub-lxc pause            stop hubben (Obsidian-sync kører videre)
   pixi-hub-lxc go-live          start hubben (kun når den ikke kører på pixi)
 EOF
+  echo -e "\n${BOLD}Går containeren i stykker${CL}"
+  echo "  github.com/subjektivdk/pixi-hub/blob/main/docs/genskab-containeren.md (vzdump, Hetzner eller pixi)"
 }
 
 # `help` at the prompt shows cmd_help (help <word> is still bash's own help); a new login says so once.

@@ -62,6 +62,9 @@ Omarchy-pluginet i pixi-hub (`deploy/omarchy/`) virker også, når hubben kører
 ### Det gør scriptet ikke
 Hubbens **data** flyttes ikke: config, `env`, database, `imports/`, `last-backup` og age-nøglen til urdata. Det er en del af selve skiftet, se [pixi-hub#18](https://github.com/subjektivdk/pixi-hub/issues/18). `status` viser, hvad der mangler.
 
+### Genskab containeren
+Se [pixi-hub/docs/genskab-containeren.md](https://github.com/subjektivdk/pixi-hub/blob/main/docs/genskab-containeren.md): gendan nattens vzdump fra VoresNAS med `pct restore 108 … --force`, eller opret en ny container med dette script (samme IP) og hent database, config, PIT-billeder og eksporter fra Hetzner. Hemmelighederne (`env`) og age-nøglen til urdata er ikke på Hetzner; de findes i vzdump, og nøglen også på pixi. `pixi-hub-lxc help` viser linket.
+
 ### Sikkerhed
 - Repoet indeholder ingen hemmeligheder. Deploy key'en laves i containeren og forlader den aldrig.
 - Containeren lytter kun på SSH. pixi-hub henter selv sine data.
