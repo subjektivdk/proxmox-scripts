@@ -8,6 +8,8 @@
 #   pixi-dashboard-lxc camera NAVN  enter a camera's RTSP URL (hidden) into env
 #   pixi-dashboard-lxc ha-token     enter the Home Assistant token (hidden) into env
 #   pixi-dashboard-lxc logs         follow the service log
+#   pixi-dashboard-lxc auto-update on|off|status|run
+#                                   check GitHub every 5 min and update when main has moved (run = once)
 # Secrets go to ~pixi/.config/pixi-dashboard/env (chmod 600) and are never printed.
 # Author: subjektivdk · License: MIT
 set -Eeuo pipefail
@@ -81,6 +83,7 @@ cmd_setup() {
   cmd_hub_key
   read -rp "  Tryk Enter, når linjen er lagt ind hos pixi-hub " _
   user_systemctl enable --now pixi-dashboard
+  cmd_auto_update on
   sleep 3
   cmd_status
 }
@@ -97,6 +100,40 @@ cmd_update() {
   install_app
   user_systemctl restart pixi-dashboard
   msg_ok "Genstartede pixi-dashboard"
+}
+
+AU_UNIT=/etc/systemd/system/pixi-dashboard-autoupdate
+
+cmd_auto_update() {
+  case "${1:-status}" in
+    on)
+      printf '%s\n' "[Unit]" "Description=pixi-dashboard: opdatér, hvis main på GitHub er rykket" \
+        "After=network-online.target" "Wants=network-online.target" "" "[Service]" "Type=oneshot" \
+        "ExecStart=/usr/local/bin/pixi-dashboard-lxc auto-update run" >"$AU_UNIT.service"
+      printf '%s\n' "[Unit]" "Description=pixi-dashboard: tjek for ny version hvert 5. minut" "" "[Timer]" \
+        "OnBootSec=3min" "OnUnitActiveSec=5min" "RandomizedDelaySec=30s" "" "[Install]" "WantedBy=timers.target" >"$AU_UNIT.timer"
+      systemctl daemon-reload
+      systemctl enable --now pixi-dashboard-autoupdate.timer >/dev/null
+      msg_ok "Automatisk opdatering er slået til (hvert 5. minut)"
+      ;;
+    off)
+      systemctl disable --now pixi-dashboard-autoupdate.timer >/dev/null 2>&1 || true
+      msg_ok "Automatisk opdatering er slået fra"
+      ;;
+    run)
+      # Only when main has moved: a fetch is one small request, and nothing restarts otherwise.
+      [[ -d "$SRC/.git" ]] || exit 0
+      as_user git -C "$SRC" fetch -q origin main || { msg_warn "kunne ikke hente fra GitHub"; exit 0; }
+      if [[ "$(as_user git -C "$SRC" rev-parse HEAD)" != "$(as_user git -C "$SRC" rev-parse origin/main)" ]]; then
+        cmd_update
+      fi
+      ;;
+    *)
+      systemctl is-enabled pixi-dashboard-autoupdate.timer 2>/dev/null || echo "slået fra"
+      systemctl list-timers --no-pager pixi-dashboard-autoupdate.timer 2>/dev/null | sed -n '1,2p'
+      journalctl -u pixi-dashboard-autoupdate --no-pager -n 20 -o cat 2>/dev/null | grep -E "pixi-dashboard:|kunne" | tail -3 || true
+      ;;
+  esac
 }
 
 cmd_status() {
@@ -136,5 +173,6 @@ case "${1:-help}" in
   camera) shift; cmd_camera "${1:-}" ;;
   ha-token) cmd_ha_token ;;
   logs) as_user journalctl --user -u pixi-dashboard -f ;;
-  *) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' ;;
+  auto-update) shift; cmd_auto_update "${1:-status}" ;;
+  *) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//' ;;
 esac
