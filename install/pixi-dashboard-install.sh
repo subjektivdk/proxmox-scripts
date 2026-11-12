@@ -20,7 +20,8 @@ msg_ok "Opdaterede Debian"
 
 msg_info "Installerer pakker"
 silent apt-get install -y --no-install-recommends \
-  ca-certificates curl git sudo openssh-server openssh-client locales whiptail dbus-user-session less nano jq
+  ca-certificates curl git sudo openssh-server openssh-client locales whiptail dbus-user-session less nano jq \
+  ffmpeg   # go2rtc laver stillbilleder (frame.jpeg) med ffmpeg; statustjek og selvhelbredelse bruger dem
 sed -i 's/^# *\(en_US.UTF-8\)/\1/; s/^# *\(da_DK.UTF-8\)/\1/' /etc/locale.gen
 silent locale-gen
 update-locale LANG=en_US.UTF-8

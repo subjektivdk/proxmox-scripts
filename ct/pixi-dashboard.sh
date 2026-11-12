@@ -40,7 +40,7 @@ var_hub_host="${var_hub_host:-pixi-hub}"       # where pixi-hub runs (ssh, key l
 var_ssh_key="${var_ssh_key:-}"        # public key text or path to a .pub file on the host
 
 header_info() {
-  clear
+  clear 2>/dev/null || true
   cat <<'EOF'
            _       _       _           _
      _ __ (_)__  _(_)    __| | __ _ ___| |__
@@ -138,7 +138,10 @@ fi
 echo -e "${BOLD}Indstillinger${CL}"
 show_settings
 echo
-whiptail --backtitle "pixi-dashboard LXC" --title "Klar?" --yesno "Opret containeren med disse indstillinger?\n\n$(show_settings)" 20 70 || exit 1
+# var_mode=default runs without questions (e.g. over ssh); setup then runs with pixi-dashboard-lxc setup.
+if [[ "${var_mode:-}" != "default" ]]; then
+  whiptail --backtitle "pixi-dashboard LXC" --title "Klar?" --yesno "Opret containeren med disse indstillinger?\n\n$(show_settings)" 20 70 || exit 1
+fi
 
 # --- template ----------------------------------------------------------------
 msg_info "Finder Debian 13-template"
@@ -216,7 +219,7 @@ IP=$(pct exec "$var_ctid" -- hostname -I | awk '{print $1}')
 echo
 msg_ok "Grundinstallationen er færdig"
 echo
-if whiptail --backtitle "pixi-dashboard LXC" --title "Opsætning" --yesno \
+if [[ "${var_mode:-}" != "default" ]] && whiptail --backtitle "pixi-dashboard LXC" --title "Opsætning" --yesno \
   "Vil du gøre opsætningen færdig nu?\n\n1. Deploy key til pixi-dashboard på GitHub\n2. Nøglen til pixi-hub (låst til dashboard state)\n3. Start tjenesten\n\nKameraer og Home Assistant bagefter i containeren:\n  pixi-dashboard-lxc camera hoveddor\n  pixi-dashboard-lxc ha-token" 19 70; then
   pct exec "$var_ctid" -- /usr/bin/pixi-dashboard-lxc setup
 fi
