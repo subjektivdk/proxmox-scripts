@@ -74,3 +74,14 @@ Se [pixi-hub/docs/genskab-containeren.md](https://github.com/subjektivdk/pixi-hu
 GitHub Actions kører shellcheck og hele `install/pixi-hub-install.sh` i en Debian 13-container med systemd ved hvert push.
 
 MIT-licens.
+
+
+## pixi-dashboard
+
+Statusskærmen (kalender, vejr, elpris, kamera) i sin egen container med go2rtc. Kør som root på Proxmox-værten:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/subjektivdk/proxmox-scripts/main/ct/pixi-dashboard.sh)"
+```
+
+I containeren: `pixi-dashboard-lxc setup` (deploy key, kloning, nøglen til pixi-hub, start), `pixi-dashboard-lxc camera <navn>` og `pixi-dashboard-lxc ha-token` (skjult indtastning; hemmeligheder kun i `~pixi/.config/pixi-dashboard/env`), `pixi-dashboard-lxc update`, `status`, `logs`. Scriptet indeholder ingen hemmeligheder.

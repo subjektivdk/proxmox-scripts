@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+# pixi-dashboard-lxc: maintenance inside the pixi-dashboard container. Run as root (or with sudo).
+#
+#   pixi-dashboard-lxc setup        GitHub deploy key, clone, install, hub key, start (first time)
+#   pixi-dashboard-lxc update       git pull + install + restart (also: dashboard-update)
+#   pixi-dashboard-lxc status       service, sources, cameras (pixi-dashboard check)
+#   pixi-dashboard-lxc hub-key      the line to put in pixi-hub's authorized_keys
+#   pixi-dashboard-lxc camera NAVN  enter a camera's RTSP URL (hidden) into env
+#   pixi-dashboard-lxc ha-token     enter the Home Assistant token (hidden) into env
+#   pixi-dashboard-lxc logs         follow the service log
+# Secrets go to ~pixi/.config/pixi-dashboard/env (chmod 600) and are never printed.
+# Author: subjektivdk · License: MIT
+set -Eeuo pipefail
+source /opt/pixi-dashboard-lxc/misc/common.func
+# shellcheck source=/dev/null
+[[ -r /etc/pixi-dashboard-lxc.conf ]] && source /etc/pixi-dashboard-lxc.conf
+DASH_USER="${DASH_USER:-pixi}"
+DASH_REPO="${DASH_REPO:-git@github.com:subjektivdk/pixi-dashboard.git}"
+HUB_HOST="${HUB_HOST:-pixi-hub}"
+HOME_DIR=$(getent passwd "$DASH_USER" | cut -d: -f6)
+SRC="$HOME_DIR/Projects/pixi-dashboard"
+ENV_FILE="$HOME_DIR/.config/pixi-dashboard/env"
+
+[[ $EUID -eq 0 ]] || exec sudo "$0" "$@"
+
+as_user() { (cd "$HOME_DIR" && runuser -u "$DASH_USER" -- env HOME="$HOME_DIR" USER="$DASH_USER" \
+  XDG_RUNTIME_DIR="/run/user/$(id -u "$DASH_USER")" PATH="$HOME_DIR/.local/bin:/usr/local/bin:/usr/bin:/bin" "$@"); }
+user_systemctl() { as_user systemctl --user "$@"; }
+
+set_env() { # set_env KEY VALUE: replace or add one line, keep the file private
+  local key="$1" value="$2" tmp
+  tmp=$(mktemp)
+  grep -v "^${key}=" "$ENV_FILE" 2>/dev/null >"$tmp" || true
+  printf '%s=%s\n' "$key" "$value" >>"$tmp"
+  install -m 0600 -o "$DASH_USER" -g "$DASH_USER" "$tmp" "$ENV_FILE"
+  rm -f "$tmp"
+}
+
+github_ok() { as_user ssh -o BatchMode=yes -T git@github.com 2>&1 | grep -q "successfully authenticated"; }
+
+cmd_github() {
+  if ! github_ok; then
+    msg_warn "Læg denne deploy key (kun læse) på GitHub-repoet pixi-dashboard:"
+    echo -e "  ${BGN}https://github.com/subjektivdk/pixi-dashboard/settings/keys/new${CL}"
+    echo
+    cat "$HOME_DIR/.ssh/pixi-dashboard-deploy.pub"
+    echo
+    while ! github_ok; do read -rp "  Tryk Enter, når nøglen er lagt ind (s = spring over) " ans; [[ "$ans" == "s" ]] && return 0; done
+  fi
+  msg_ok "GitHub accepterer deploy key"
+  if [[ ! -d "$SRC/.git" ]]; then
+    msg_info "Kloner pixi-dashboard"
+    silent as_user git clone "$DASH_REPO" "$SRC"
+    msg_ok "Klonede pixi-dashboard til $SRC"
+  fi
+}
+
+install_app() {
+  msg_info "Installerer pixi-dashboard med uv"
+  silent as_user uv tool install --force "$SRC"
+  install -m 0644 -o "$DASH_USER" -g "$DASH_USER" "$SRC/deploy/systemd/pixi-dashboard.service" \
+    "$HOME_DIR/.config/systemd/user/pixi-dashboard.service"
+  user_systemctl daemon-reload
+  msg_ok "Installerede pixi-dashboard"
+}
+
+cmd_hub_key() {
+  echo "Læg denne linje i ~/.ssh/authorized_keys hos pixi i containeren pixi-hub. Nøglen kan kun hente"
+  echo "familiens data (pixi-hub --json dashboard state), intet andet:"
+  echo
+  echo "command=\"pixi-hub --json dashboard state\",restrict $(cat "$HOME_DIR/.ssh/pixi-hub-dashboard.pub")"
+  echo
+  echo "Fra laptoppen, fx:  ssh pixi@pixi-hub 'cat >> ~/.ssh/authorized_keys'   (indsæt linjen, Ctrl+D)"
+}
+
+cmd_setup() {
+  cmd_github
+  [[ -d "$SRC/.git" ]] || die "pixi-dashboard er ikke klonet (pixi-dashboard-lxc setup igen, når deploy key er lagt ind)."
+  install_app
+  as_user sh -c "ssh-keyscan -t ed25519 $HUB_HOST >> ~/.ssh/known_hosts 2>/dev/null" || true
+  cmd_hub_key
+  read -rp "  Tryk Enter, når linjen er lagt ind hos pixi-hub " _
+  user_systemctl enable --now pixi-dashboard
+  sleep 3
+  cmd_status
+}
+
+cmd_update() {
+  [[ -d "$SRC/.git" ]] || die "pixi-dashboard er ikke klonet endnu (pixi-dashboard-lxc setup)."
+  local before after
+  before=$(as_user git -C "$SRC" rev-parse --short HEAD)
+  msg_info "Henter pixi-dashboard"
+  silent as_user git -C "$SRC" pull --ff-only
+  after=$(as_user git -C "$SRC" rev-parse --short HEAD)
+  msg_ok "pixi-dashboard: $before → $after"
+  [[ "$before" != "$after" ]] && as_user git -C "$SRC" log --format="    %h %s" "$before..$after"
+  install_app
+  user_systemctl restart pixi-dashboard
+  msg_ok "Genstartede pixi-dashboard"
+}
+
+cmd_status() {
+  user_systemctl --no-pager --lines=0 status pixi-dashboard || true
+  echo
+  as_user pixi-dashboard check || true
+  echo
+  echo "Siden: http://$(hostname -I | awk '{print $1}'):8080/   ·   indstillinger: /admin"
+}
+
+cmd_camera() {
+  local name="${1:-}"
+  [[ "$name" =~ ^[a-z0-9_]+$ ]] || die "Brug: pixi-dashboard-lxc camera <navn> (små bogstaver, tal og _), fx hoveddor"
+  local key="CAMERA_${name^^}_URL" url
+  read -rsp "  RTSP(S)-URL til $name (vises ikke): " url; echo
+  [[ "$url" =~ ^rtsps?:// ]] || die "URL'en skal starte med rtsp:// eller rtsps://"
+  set_env "$key" "$url"
+  msg_ok "Gemte $key i env. Husk [cameras.$name] i config (eller tilføj det i /admin efter genstart)."
+  user_systemctl restart pixi-dashboard 2>/dev/null || true
+}
+
+cmd_ha_token() {
+  local token
+  read -rsp "  Long-lived token fra Home Assistant (vises ikke): " token; echo
+  [[ -n "$token" ]] || die "Tomt token."
+  set_env HA_TOKEN "$token"
+  msg_ok "Gemte HA_TOKEN i env"
+  user_systemctl restart pixi-dashboard 2>/dev/null || true
+}
+
+case "${1:-help}" in
+  setup) cmd_setup ;;
+  update | dashboard-update) cmd_update ;;
+  status) cmd_status ;;
+  github) cmd_github ;;
+  hub-key) cmd_hub_key ;;
+  camera) shift; cmd_camera "${1:-}" ;;
+  ha-token) cmd_ha_token ;;
+  logs) as_user journalctl --user -u pixi-dashboard -f ;;
+  *) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' ;;
+esac
